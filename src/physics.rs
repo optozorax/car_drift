@@ -518,18 +518,20 @@ impl Car {
         }
     }
 
-    pub fn process_collision(&mut self, wall: &Wall, params: &PhysicsParameters, time: f32) {
+    pub fn process_collision(&mut self, wall: &Wall, params: &PhysicsParameters, time: f32) -> bool {
+        let mut have = false;
         for point in self.get_points() {
             if wall.is_inside(point) {
-                let speed_at_point = self.speed_at_point(point);
                 let outer_force = wall.outer_force(point);
-                let outer_speed = proj(speed_at_point, outer_force);
-                let dir = dot(outer_speed, outer_force);
-                if dir < 0. {
-                    self.apply_force(point, outer_force * params.wall_force / time);
+                self.apply_force(point, outer_force * params.wall_force);
+                if outer_force.length() > 1.7 {
+                    self.speed *= 0.1;
+                    self.angle_speed *= 0.1;
                 }
+                have = true;
             }
         }
+        have
     }
 
     pub fn draw_car(&mut self, painter: &Painter, to_screen: &RectTransform) {
@@ -621,7 +623,7 @@ impl Wall {
     pub fn outer_force(&self, pos: Pos2) -> Vec2 {
         let xf = self.to_local_coordinates(pos).x / self.size.x;
         rotate_around_origin(
-            (vec2(1. + (1. - xf.abs()) * 5., 0.) * xf.signum()).to_pos2(),
+            (vec2(1. + (1. - xf.abs()), 0.) * xf.signum()).to_pos2(),
             self.angle,
         )
         .to_vec2()

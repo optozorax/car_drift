@@ -288,7 +288,7 @@ impl eframe::App for TemplateApp {
                         } else if keys_down.contains(&egui::Key::ArrowRight) {
                             self.car.turn_right(1.0, &self.params.physics, time);
                         } else {
-                            self.car.remove_turns(&self.params.physics, time);
+                            self.car.remove_turns(&self.params.physics, time * 5.);
                         }
 
                         self.car.apply_wheels_force(
@@ -302,7 +302,9 @@ impl eframe::App for TemplateApp {
                         );
 
                         for wall in self.walls.all_elements() {
-                            self.car.process_collision(wall, &self.params.physics, time);
+                            if self.car.process_collision(wall, &self.params.physics, time) {
+                                self.sum_reward -= 0.01;
+                            }
                         }
 
                         if i == 0 {

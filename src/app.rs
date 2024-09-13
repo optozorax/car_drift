@@ -1,3 +1,5 @@
+use crate::app::emath::RectTransform;
+use egui::Painter;
 use egui::containers::Frame;
 use egui::pos2;
 use egui::vec2;
@@ -30,12 +32,14 @@ struct Parameters {
     time: f32,
     wheel_turn_per_time: f32,
     angle_limit: f32,
-    draw_scale: f32,
     force_draw_multiplier: f32,
     plot_size: f32,
     canvas_size: f32,
+    view_size: f32,
     steps_per_time: usize,
     graph_points_size_limit: usize,
+    wall_force: f32,
+    max_speed: f32,
 }
 
 impl Default for Parameters {
@@ -49,14 +53,16 @@ impl Default for Parameters {
             rolling_resistance_coefficient: 0.006, // car tire, https://en.wikipedia.org/wiki/Rolling_resistance
             drift_starts_at: 0.1,
             time: 0.5,
-            wheel_turn_per_time: 0.05,
+            wheel_turn_per_time: 0.01,
             angle_limit: std::f32::consts::PI * 0.2,
-            draw_scale: 0.4,
             force_draw_multiplier: 4.4,
             plot_size: 170.,
-            canvas_size: 1000.,
+            canvas_size: 500.,
+            view_size: 1500.,
             steps_per_time: 3,
             graph_points_size_limit: 1000,
+            wall_force: 1000.,
+            max_speed: 100.,
         }
     }
 }
@@ -126,10 +132,6 @@ impl Parameters {
                 egui_angle(ui, &mut self.angle_limit);
                 ui.end_row();
 
-                ui.label("Draw scale:");
-                egui_0_1(ui, &mut self.draw_scale);
-                ui.end_row();
-
                 ui.label("Force draw mul:");
                 egui_f32_positive(ui, &mut self.force_draw_multiplier);
                 ui.end_row();
@@ -139,7 +141,23 @@ impl Parameters {
                 ui.end_row();
 
                 ui.label("Canvas size:");
-                egui_f32_positive(ui, &mut self.canvas_size);
+                ui.add(
+                    DragValue::new(&mut self.canvas_size)
+                        .speed(1.)
+                        .range(0.0..=10000.)
+                        .min_decimals(0)
+                        .max_decimals(0),
+                );
+                ui.end_row();
+
+                ui.label("View size:");
+                ui.add(
+                    DragValue::new(&mut self.view_size)
+                        .speed(1.)
+                        .range(0.0..=10000.)
+                        .min_decimals(0)
+                        .max_decimals(0),
+                );
                 ui.end_row();
 
                 ui.label("Steps per time:");
@@ -148,6 +166,14 @@ impl Parameters {
 
                 ui.label("Graph points size:");
                 egui_usize(ui, &mut self.graph_points_size_limit);
+                ui.end_row();
+
+                ui.label("Wall force:");
+                egui_f32_positive(ui, &mut self.wall_force);
+                ui.end_row();
+
+                ui.label("Max speed:");
+                egui_f32_positive(ui, &mut self.max_speed);
                 ui.end_row();
             });
     }
@@ -198,6 +224,57 @@ fn egui_f32_positive(ui: &mut Ui, value: &mut f32) {
 
 fn egui_usize(ui: &mut Ui, value: &mut usize) {
     ui.add(DragValue::new(value));
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+struct Wall {
+    center: Pos2,
+    size: Vec2,
+    angle: f32,
+}
+
+impl Default for Wall {
+    fn default() -> Self {
+        Self {
+            center: pos2(500., 500.),
+            size: vec2(50., 1500.) / 2.,
+            angle: 0.5,
+        }
+    }
+}
+
+// todo: сделать оптимизацию чтобы не считать синусы и косинусы постоянно
+impl Wall {
+    fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
+        rotate_around_origin((pos - self.center).to_pos2(), -self.angle)
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn from_local_coordinates(&self, pos: Pos2) -> Pos2 {
+        rotate_around_origin(pos, self.angle) + self.center.to_vec2()
+    }
+
+    fn is_inside(&self, pos: Pos2) -> bool {
+        let pos = self.to_local_coordinates(pos);
+        pos.x.abs() < self.size.x && pos.y.abs() < self.size.y
+    }
+
+    fn outer_force(&self, pos: Pos2) -> Vec2 {
+        let xf = self.to_local_coordinates(pos).x / self.size.x;
+        rotate_around_origin((vec2(1. + (1. - xf.abs()) * 5., 0.) * xf.signum()).to_pos2(), self.angle).to_vec2()
+    }
+
+    fn get_points(&self) -> Vec<Pos2> {
+        vec![
+            pos2(-self.size.x, -self.size.y),
+            pos2(self.size.x, -self.size.y),
+            pos2(self.size.x, self.size.y),
+            pos2(-self.size.x, self.size.y),
+        ]
+        .into_iter()
+        .map(|p| self.from_local_coordinates(p))
+        .collect()
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
@@ -313,7 +390,7 @@ impl Default for Car {
     fn default() -> Self {
         let mut result = Car {
             center: pos2(250., 250.),
-            size: vec2(100., 50.),
+            size: vec2(100., 50.) / 2.,
             angle: 0.,
             mass: 100.,
             speed: vec2(0., 0.),
@@ -430,7 +507,7 @@ impl Car {
 
     fn is_inside(&self, mut pos: Pos2) -> bool {
         pos = self.to_local_coordinates(pos);
-        pos.x.abs() < self.size.x / 2. && pos.y.abs() < self.size.y / 2.
+        pos.x.abs() < self.size.x && pos.y.abs() < self.size.y
     }
 
     fn get_points(&self) -> Vec<Pos2> {
@@ -441,7 +518,7 @@ impl Car {
             pos2(-self.size.x, self.size.y),
         ]
         .into_iter()
-        .map(|p| self.from_local_coordinates(pos2(p.x / 2., p.y / 2.)))
+        .map(|p| self.from_local_coordinates(pos2(p.x, p.y )))
         .collect()
     }
 
@@ -458,11 +535,14 @@ impl Car {
             .collect()
     }
 
-    fn speed_at_wheel(&self, wheel: &Wheel) -> Vec2 {
-        let pos = self.wheel_pos(wheel);
+    fn speed_at_point(&self, pos: Pos2) -> Vec2 {
         let r = pos - self.center;
         let rotation_speed = vec2(-r.y, r.x) * self.angle_speed;
         rotation_speed + self.speed
+    }
+
+    fn speed_at_wheel(&self, wheel: &Wheel) -> Vec2 {
+        self.speed_at_point(self.wheel_pos(wheel))
     }
 
     // length always equal to 1
@@ -477,11 +557,8 @@ impl Car {
 
     fn apply_wheels_force(
         &mut self,
-        graphs: &mut Graphs,
-        dbg: bool,
-        drifts: &mut [Drifts],
+        mut drift_observer: impl FnMut(usize, Vec2, f32),
         params: &Parameters,
-        add_to_graphs: bool,
     ) {
         // about traction: https://www.engineeringtoolbox.com/tractive-effort-d_1783.html
         let traction_force = params.traction_coefficient * self.mass * params.gravity;
@@ -490,6 +567,11 @@ impl Car {
             let speed_at_wheel = self.speed_at_wheel(&wheel);
             let speed_coefficient =
                 (speed_at_wheel.length() / params.full_force_on_speed).clamp(0., 1.);
+            let anti_speed_coefficient = if speed_at_wheel.length() < params.max_speed {
+                1.
+            } else {
+                0.
+            };
             let wheel_dir = self.wheel_dir1(&wheel);
             let wheel_speed_parallel_dir =
                 proj(speed_at_wheel, wheel_dir) * inv_len(speed_at_wheel);
@@ -521,10 +603,10 @@ impl Car {
             let braking_or_acceleration_force = match wheel.action {
                 WheelAction::Nothing => vec2(0., 0.),
                 WheelAction::AccelerationForward(ratio) => {
-                    wheel_dir * params.acceleration_ratio * ratio
+                    wheel_dir * params.acceleration_ratio * ratio * anti_speed_coefficient
                 }
                 WheelAction::AccelerationBackward(ratio) => {
-                    -wheel_dir * params.acceleration_ratio * ratio
+                    -wheel_dir * params.acceleration_ratio * ratio * anti_speed_coefficient
                 }
                 WheelAction::Braking(ratio) => {
                     -wheel_speed_parallel_dir
@@ -542,86 +624,21 @@ impl Car {
                 total_force = total_force.normalized();
             }
 
-            drifts[i].process_point(
-                self.wheel_pos(&wheel),
-                side_friction_force.length() > params.drift_starts_at,
-            );
-
-            if add_to_graphs {
-                graphs.add_point(
-                    format!("w{i}"),
-                    format!("wheel {i} brake or accel"),
-                    braking_or_acceleration_force.length(),
-                    Color32::DARK_RED,
-                    params,
-                );
-                graphs.add_point(
-                    format!("w{i}"),
-                    format!("wheel {i} corner force"),
-                    corner_force.length(),
-                    Color32::RED,
-                    params,
-                );
-                graphs.add_point(
-                    format!("w{i}"),
-                    format!("wheel {i} side friction force"),
-                    side_friction_force.length(),
-                    Color32::BLUE,
-                    params,
-                );
-                graphs.add_point(
-                    format!("w{i}"),
-                    format!("wheel {i} rolling resistance"),
-                    side_friction_force.length(),
-                    Color32::DARK_BLUE,
-                    params,
-                );
-                graphs.add_point(
-                    format!("w{i}"),
-                    format!("wheel {i} total force"),
-                    total_force.length(),
-                    Color32::GREEN,
-                    params,
-                );
-            }
-
-            if dbg {
-                dbg!(speed_at_wheel);
-                dbg!(speed_at_wheel.length());
-                dbg!(speed_coefficient);
-                dbg!(wheel_dir);
-                dbg!(wheel_dir.length());
-                dbg!(wheel_speed_parallel_dir);
-                dbg!(wheel_speed_parallel_dir.length());
-                dbg!(wheel_speed_perpendicular_dir);
-                dbg!(wheel_speed_perpendicular_dir.length());
-                dbg!(slip_angle);
-                dbg!(slip_coefficient);
-                dbg!(corner_force);
-                dbg!(corner_force.length());
-                dbg!(side_friction_ratio);
-                dbg!(side_friction_force);
-                dbg!(side_friction_force.length());
-                dbg!(rolling_resistance);
-                dbg!(rolling_resistance.length());
-                dbg!(braking_or_acceleration_force);
-                dbg!(braking_or_acceleration_force.length());
-                dbg!(total_force);
-                dbg!(total_force.length());
-                dbg!("-------------------------------------------------------");
-            }
+            drift_observer(i, self.wheel_pos(&wheel).to_vec2(), side_friction_force.length());
 
             total_force *= traction_per_wheel;
 
             self.apply_force(self.wheel_pos(&wheel), total_force);
-
-            /*
-               * потом сделать чтобы колесо крутилось, чтобы нельзя было ехать назад сразу после того как едешь вперёд
-               * начать делать дорогу
-               * затем базовую эволюцию и нейронку
-
-            */
         }
+    }
+
+    fn get_internal_values(&self) -> InternalCarValues {
+        InternalCarValues {
+            local_speed: rotate_around_origin(self.speed.to_pos2(), self.angle).to_vec2(),
+            local_acceleration: rotate_around_origin(self.acceleration.to_pos2(), self.angle).to_vec2(),
+            angle_acceleration: self.angle_acceleration,
+            angle_speed: self.angle_speed,
+        } 
     }
 }
 
@@ -681,23 +698,13 @@ impl Graphs {
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
-pub struct TemplateApp {
+pub struct ControllableCar {
     car: Car,
     up_wheels: Vec<usize>,
     rotated_wheels: Vec<usize>,
-
-    // in car local coordinates
-    drag_start: Option<Pos2>,
-    trajectories: VecDeque<VecDeque<Pos2>>,
-    points_count: usize,
-
-    graphs: Graphs,
-    drifts: Vec<Drifts>,
-
-    params: Parameters,
 }
 
-impl Default for TemplateApp {
+impl Default for ControllableCar {
     fn default() -> Self {
         Self {
             car: Default::default(),
@@ -709,14 +716,200 @@ impl Default for TemplateApp {
             // two wheels
             up_wheels: vec![1],
             rotated_wheels: vec![0],
+        }
+    }
+}
 
-            drag_start: None,
+impl ControllableCar {
+    fn move_forward(&mut self, ratio: f32) {
+        for pos in &self.up_wheels {
+            self.car.wheels[*pos].action = WheelAction::AccelerationForward(ratio);
+        }
+    }
+
+    fn move_backwards(&mut self, ratio: f32) {
+        for pos in &self.up_wheels {
+            self.car.wheels[*pos].action = WheelAction::AccelerationBackward(ratio);
+        }
+    }
+
+    fn brake(&mut self) {
+        for pos in &self.up_wheels {
+            self.car.wheels[*pos].action = WheelAction::Braking(1.);
+        }
+    }
+
+    fn turn_left(&mut self, ratio: f32, params: &Parameters, time: f32) {
+        for pos in &self.rotated_wheels {
+            self.car.wheels[*pos].angle -=
+                params.wheel_turn_per_time * time * ratio;
+            if self.car.wheels[*pos].angle < -params.angle_limit {
+                self.car.wheels[*pos].angle = -params.angle_limit;
+            }
+        }
+    }
+
+    fn turn_right(&mut self, ratio: f32, params: &Parameters, time: f32) {
+        for pos in &self.rotated_wheels {
+            self.car.wheels[*pos].angle +=
+                params.wheel_turn_per_time * time * ratio;
+            if self.car.wheels[*pos].angle > params.angle_limit {
+                self.car.wheels[*pos].angle = params.angle_limit;
+            }
+        }
+    }
+
+    fn remove_turns(&mut self, params: &Parameters, time: f32) {
+        for pos in &self.rotated_wheels {
+            let angle = &mut self.car.wheels[*pos].angle;
+            let change = params.wheel_turn_per_time * time;
+            if angle.abs() > change {
+                if *angle > 0. {
+                    *angle -= change;
+                } else {
+                    *angle += change;
+                }
+            } else {
+                *angle *= 0.1;
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.car.speed = vec2(0., 0.);
+        self.car.angle_speed = 0.;
+        self.car.angle = 0.;
+        self.car.center = pos2(50., 600.);
+        for pos in &self.rotated_wheels {
+            self.car.wheels[*pos].angle = 0.;
+        }
+    }
+
+    fn step(&mut self, time: f32) {
+        self.car.step(time);
+        for wheel in &mut self.car.wheels {
+            wheel.action = WheelAction::Nothing;
+        }
+    }
+
+    fn process_collision(&mut self, wall: &Wall, params: &Parameters, time: f32) {
+        for point in self.car.get_points() {
+            if wall.is_inside(point) {
+                let speed_at_point = self.car.speed_at_point(point);
+                let outer_force = wall.outer_force(point);
+                let outer_speed = proj(speed_at_point, outer_force);
+                let dir = dot(outer_speed, outer_force);
+                if dir < 0. {
+                    self.car.apply_force(point, outer_force * params.wall_force / time);
+                }
+            }
+        }
+    }
+
+    fn draw_car(&mut self, painter: &Painter, to_screen: &RectTransform) {
+        painter.add(Shape::closed_line(
+            self.car
+                .get_points()
+                .into_iter()
+                .map(|p| to_screen.transform_pos(p))
+                .collect(),
+            Stroke::new(2.0, Color32::from_rgb(0, 128, 128)),
+        ));
+        painter.extend(
+            self.car
+                .get_wheels()
+                .into_iter()
+                .map(|p| Shape::LineSegment {
+                    points: [
+                        to_screen.transform_pos(p.0),
+                        to_screen.transform_pos(p.1),
+                    ],
+                    stroke: Stroke::new(2.0, Color32::from_rgb(128, 0, 128)).into(),
+                }),
+        );
+    }
+
+    fn draw_forces(&mut self, painter: &Painter, params: &Parameters, to_screen: &RectTransform) {
+        for (pos, dir) in &self.car.forces {
+            painter.add(Shape::LineSegment {
+                points: [
+                    to_screen.transform_pos(*pos),
+                    to_screen.transform_pos(
+                        *pos + *dir
+                            * params.time
+                            * params.force_draw_multiplier,
+                    ),
+                ],
+                stroke: Stroke::new(1.0, Color32::from_rgb(0, 0, 0)).into(),
+            });
+        }
+    }
+
+    fn get_center(&self) -> Pos2 {
+        self.car.center
+    }
+
+    fn apply_wheels_force(
+        &mut self,
+        drift_observer: impl FnMut(usize, Vec2, f32),
+        params: &Parameters,
+    ) {
+        self.car.apply_wheels_force(drift_observer, params);
+    }
+
+    fn get_internal_values(&self) -> InternalCarValues {
+        self.car.get_internal_values()
+    }
+}
+
+struct InternalCarValues {
+    local_speed: Vec2,
+    local_acceleration: Vec2,
+    angle_acceleration: f32,
+    angle_speed: f32,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct TemplateApp {
+    car: ControllableCar,
+
+    // in car local coordinates
+    trajectories: VecDeque<Pos2>,
+    points_count: usize,
+
+    graphs: Graphs,
+    drifts: Vec<Drifts>,
+
+    params: Parameters,
+
+    walls: Vec<Wall>,
+}
+
+impl Default for TemplateApp {
+    fn default() -> Self {
+        Self {
+            car: Default::default(),
+
             trajectories: Default::default(),
             points_count: 0,
             graphs: Default::default(),
             drifts: vec![Default::default(); Car::default().wheels.len()],
 
             params: Default::default(),
+
+            walls: vec![
+                Wall {
+                    center: pos2(900., 500.),
+                    size: vec2(50., 1500.) / 2.,
+                    angle: 0.1,
+                },
+                Wall {
+                    center: pos2(500., 900.),
+                    size: vec2(50., 1500.) / 2.,
+                    angle: 1.7,
+                }
+            ],
         }
     }
 }
@@ -729,7 +922,6 @@ impl TemplateApp {
                 eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             result.params = stored.params;
         }
-        result.trajectories.push_back(Default::default());
         result.reset_car();
         result
     }
@@ -737,17 +929,10 @@ impl TemplateApp {
 
 impl TemplateApp {
     fn reset_car(&mut self) {
-        self.car.speed = vec2(0., 0.);
-        self.car.angle_speed = 0.;
-        self.car.angle = 0.;
-        self.car.center = pos2(100., 600.);
+        self.car.reset();
         self.trajectories.clear();
-        self.trajectories.push_back(Default::default());
         self.graphs.clear();
         self.points_count = 0;
-        for pos in &self.rotated_wheels {
-            self.car.wheels[*pos].angle = 0.;
-        }
         self.drifts.iter_mut().for_each(|x| x.drifts.clear());
     }
 }
@@ -758,8 +943,6 @@ impl eframe::App for TemplateApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut drag_pos = None;
-
         let keys_down = ctx.input(|i| i.keys_down.clone());
 
         let create_plot = |name, params: &Parameters| {
@@ -777,54 +960,25 @@ impl eframe::App for TemplateApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 self.params.ui(ui);
-                if self.graphs.points.contains_key("g") {
-                    ui.vertical(|ui| {
-                        for (name, (points, color)) in &self.graphs.points["g"] {
-                            create_plot(name.to_owned(), &self.params).show(ui, |plot_ui| {
-                                let line = Line::new(PlotPoints::from_iter(points.clone()))
-                                    .fill(0.)
-                                    .color(*color);
-                                plot_ui.line(line.name(name));
-                            });
-                        }
-                    });
-                }
                 Frame::canvas(ui.style()).show(ui, |ui| {
                     let (response, painter) = ui.allocate_painter(
-                        Vec2::new(self.params.canvas_size, self.params.canvas_size)
-                            * self.params.draw_scale,
+                        Vec2::new(self.params.canvas_size, self.params.canvas_size),
                         Sense::drag(),
                     );
 
                     let from_screen = emath::RectTransform::from_to(
-                        (response.rect.translate(-response.rect.min.to_vec2())
-                            * self.params.draw_scale)
-                            .translate(response.rect.min.to_vec2()),
-                        Rect::from_min_size(Pos2::ZERO, response.rect.size()),
+                        response.rect,
+                        Rect::from_center_size(self.car.get_center(), Vec2::new(self.params.view_size, self.params.view_size)),
                     );
                     let to_screen = from_screen.inverse();
 
-                    if response.dragged() {
-                        if let Some(mut pos) = response.interact_pointer_pos() {
-                            drag_pos = Some(from_screen.transform_pos(pos));
-                            pos = from_screen.transform_pos(pos);
-                            if self.car.is_inside(pos) && self.drag_start.is_none() {
-                                self.drag_start = Some(self.car.to_local_coordinates(pos));
-                            }
-                        }
-                    } else {
-                        self.drag_start = None;
-                    }
-
-                    for trajectory in &self.trajectories {
-                        painter.add(Shape::line(
-                            trajectory
-                                .iter()
-                                .map(|p| to_screen.transform_pos(*p))
-                                .collect(),
-                            Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
-                        ));
-                    }
+                    painter.add(Shape::line(
+                        self.trajectories
+                            .iter()
+                            .map(|p| to_screen.transform_pos(*p))
+                            .collect(),
+                        Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
+                    ));
 
                     for wheel_drifts in &self.drifts {
                         for drift in &wheel_drifts.drifts {
@@ -835,26 +989,18 @@ impl eframe::App for TemplateApp {
                         }
                     }
 
-                    painter.add(Shape::closed_line(
-                        self.car
-                            .get_points()
-                            .into_iter()
-                            .map(|p| to_screen.transform_pos(p))
-                            .collect(),
-                        Stroke::new(2.0, Color32::from_rgb(0, 128, 128)),
-                    ));
-                    painter.extend(
-                        self.car
-                            .get_wheels()
-                            .into_iter()
-                            .map(|p| Shape::LineSegment {
-                                points: [
-                                    to_screen.transform_pos(p.0),
-                                    to_screen.transform_pos(p.1),
-                                ],
-                                stroke: Stroke::new(2.0, Color32::from_rgb(128, 0, 128)).into(),
-                            }),
-                    );
+                    for wall in &self.walls {
+                        painter.add(Shape::closed_line(
+                            wall
+                                .get_points()
+                                .into_iter()
+                                .map(|p| to_screen.transform_pos(p))
+                                .collect(),
+                            Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
+                        ));
+                    }
+
+                    self.car.draw_car(&painter, &to_screen);
 
                     for i in 0..self.params.steps_per_time {
                         let time = self.params.time / self.params.steps_per_time as f32;
@@ -862,89 +1008,43 @@ impl eframe::App for TemplateApp {
                         if keys_down.contains(&egui::Key::Escape) {
                             self.reset_car();
                         }
-
                         if keys_down.contains(&egui::Key::Space) {
-                            for pos in &self.up_wheels {
-                                self.car.wheels[*pos].action = WheelAction::Braking(1.);
-                            }
+                            self.car.brake();
                         }
-
                         if keys_down.contains(&egui::Key::ArrowUp) {
-                            for pos in &self.up_wheels {
-                                self.car.wheels[*pos].action = WheelAction::AccelerationForward(1.);
-                            }
+                            self.car.move_forward(1.0);
                         }
-
                         if keys_down.contains(&egui::Key::ArrowDown) {
-                            for pos in &self.up_wheels {
-                                self.car.wheels[*pos].action =
-                                    WheelAction::AccelerationBackward(1.);
-                            }
+                            self.car.move_backwards(1.0);
                         }
-
                         if keys_down.contains(&egui::Key::ArrowLeft) {
-                            for pos in &self.rotated_wheels {
-                                self.car.wheels[*pos].angle -=
-                                    self.params.wheel_turn_per_time * time;
-                                if self.car.wheels[*pos].angle < -self.params.angle_limit {
-                                    self.car.wheels[*pos].angle = -self.params.angle_limit;
-                                }
-                            }
+                            self.car.turn_left(1.0, &self.params, time);
                         } else if keys_down.contains(&egui::Key::ArrowRight) {
-                            for pos in &self.rotated_wheels {
-                                self.car.wheels[*pos].angle +=
-                                    self.params.wheel_turn_per_time * time;
-                                if self.car.wheels[*pos].angle > self.params.angle_limit {
-                                    self.car.wheels[*pos].angle = self.params.angle_limit;
-                                }
-                            }
+                            self.car.turn_right(1.0, &self.params, time);
                         } else {
-                            for pos in &self.rotated_wheels {
-                                let angle = &mut self.car.wheels[*pos].angle;
-                                let change = self.params.wheel_turn_per_time * time;
-                                if angle.abs() > change {
-                                    if *angle > 0. {
-                                        *angle -= change;
-                                    } else {
-                                        *angle += change;
-                                    }
-                                } else {
-                                    *angle *= 0.1;
-                                }
-                            }
+                            self.car.remove_turns(&self.params, time);
                         }
 
-                        if let Some((drag_start, drag_pos)) = self.drag_start.zip(drag_pos) {
-                            let start_converted = self.car.from_local_coordinates(drag_start);
-                            self.car
-                                .apply_force(start_converted, drag_pos - start_converted);
-                        }
                         self.car.apply_wheels_force(
-                            &mut self.graphs,
-                            keys_down.contains(&egui::Key::Backspace),
-                            &mut self.drifts,
+                            |i, pos, value| {
+                                self.drifts[i].process_point(pos.to_pos2(), value > self.params.drift_starts_at);
+                            },
                             &self.params,
-                            i == 0,
                         );
+
+                        for wall in &self.walls {
+                            self.car.process_collision(wall, &self.params, time);
+                        }
+
                         if i == 0 {
-                            for (pos, dir) in &self.car.forces {
-                                painter.add(Shape::LineSegment {
-                                    points: [
-                                        to_screen.transform_pos(*pos),
-                                        to_screen.transform_pos(
-                                            *pos + *dir
-                                                * self.params.time
-                                                * self.params.force_draw_multiplier,
-                                        ),
-                                    ],
-                                    stroke: Stroke::new(1.0, Color32::from_rgb(0, 0, 0)).into(),
-                                });
-                            }
+                            self.car.draw_forces(&painter, &self.params, &to_screen);
+
+                            let values = self.car.get_internal_values();
 
                             self.graphs.add_point(
                                 "g",
                                 "acceleration",
-                                self.car.acceleration.length(),
+                                values.local_acceleration.length(),
                                 Color32::GRAY,
                                 &self.params,
                             );
@@ -952,36 +1052,26 @@ impl eframe::App for TemplateApp {
                             self.graphs.add_point(
                                 "g",
                                 "torque",
-                                self.car.angle_acceleration,
+                                values.angle_acceleration,
                                 Color32::BROWN,
                                 &self.params,
                             );
-                        }
-                        let mut prev_car = self.car.clone();
-                        self.car.step(time);
-                        if self.car.center.x.is_nan() {
-                            dbg!(&self.car);
-                            dbg!(&prev_car);
-                            prev_car.apply_wheels_force(
-                                &mut self.graphs,
-                                true,
-                                &mut self.drifts,
+
+                            self.graphs.add_point(
+                                "g",
+                                "speed",
+                                values.local_speed.length(),
+                                Color32::BLACK,
                                 &self.params,
-                                i == 0,
                             );
-                            panic!();
                         }
-                        for wheel in &mut self.car.wheels {
-                            wheel.action = WheelAction::Nothing;
-                        }
+
+                        self.car.step(time);
                     }
                 });
             });
 
-            for (group, graphs) in &self.graphs.points {
-                if group == "g" {
-                    continue;
-                }
+            for graphs in self.graphs.points.values() {
                 ui.horizontal_wrapped(|ui| {
                     for (name, (points, color)) in graphs {
                         ui.allocate_ui(
@@ -1000,49 +1090,11 @@ impl eframe::App for TemplateApp {
             }
         });
 
-        self.graphs.add_point(
-            "g",
-            "speed",
-            self.car.speed.length(),
-            Color32::BLACK,
-            &self.params,
-        );
-
-        self.trajectories
-            .back_mut()
-            .unwrap()
-            .push_back(self.car.center);
+        self.trajectories.push_back(self.car.get_center());
         self.points_count += 1;
         if self.points_count > self.params.graph_points_size_limit {
-            self.trajectories.front_mut().unwrap().pop_front();
-            if self.trajectories.front().unwrap().is_empty() {
-                self.trajectories.pop_front();
-            }
+            self.trajectories.pop_front();
             self.points_count -= 1;
-        }
-
-        let mut teleported = false;
-        if self.car.center.x > self.params.canvas_size {
-            self.car.center.x -= self.params.canvas_size;
-            teleported = true;
-        }
-        if self.car.center.y > self.params.canvas_size {
-            self.car.center.y -= self.params.canvas_size;
-            teleported = true;
-        }
-        if self.car.center.x < 0. {
-            self.car.center.x += self.params.canvas_size;
-            teleported = true;
-        }
-        if self.car.center.y < 0. {
-            self.car.center.y += self.params.canvas_size;
-            teleported = true;
-        }
-        if teleported {
-            self.trajectories.push_back(Default::default());
-            self.drifts
-                .iter_mut()
-                .for_each(|x| x.drift_recording = false);
         }
 
         ctx.request_repaint();

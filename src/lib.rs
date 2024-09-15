@@ -3,10 +3,13 @@
 
 mod app;
 mod common;
+mod evolution;
 mod math;
+mod nn;
 mod physics;
 mod storage;
 pub use app::TemplateApp;
+pub use evolution::evolution;
 
 #[macro_export]
 macro_rules! error {

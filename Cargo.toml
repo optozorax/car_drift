@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
 edition = "2021"
 include = ["LICENSE-APACHE", "LICENSE-MIT", "**/*.rs", "Cargo.toml"]
-rust-version = "1.76"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -20,6 +19,10 @@ eframe = { version = "0.28", default-features = false, features = [
 ] }
 log = "0.4"
 egui_plot = "0.28.1"
+rand = "0.8.5"
+differential-evolution = "0.2.2"
+spiril = { git = "https://github.com/Jeffail/spiril" }
+cmaes = { path = "cmaes" }
 
 # You only need serde if you want app persistence:
 serde = { version = "1", features = ["derive"] }
@@ -55,3 +58,6 @@ opt-level = 2
 # If you fork https://github.com/emilk/egui you can test with:
 # egui = { path = "../egui/crates/egui" }
 # eframe = { path = "../egui/crates/eframe" }
+
+[dev-dependencies]
+approx = "0.5"

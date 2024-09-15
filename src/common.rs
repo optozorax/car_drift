@@ -8,6 +8,35 @@ use egui::Ui;
 
 use egui::Slider;
 
+pub fn pairs<U, T: Iterator<Item = U> + Clone>(t: T) -> impl Iterator<Item = (U, U)> {
+    t.clone().zip(t.skip(1))
+}
+
+pub trait AnyOrBothWith {
+    type Inner;
+    fn any_or_both_with<F: FnOnce(Self::Inner, Self::Inner) -> Self::Inner>(
+        self,
+        b: Option<Self::Inner>,
+        f: F,
+    ) -> Option<Self::Inner>;
+}
+
+impl<T> AnyOrBothWith for Option<T> {
+    type Inner = T;
+    fn any_or_both_with<F: FnOnce(Self::Inner, Self::Inner) -> Self::Inner>(
+        self,
+        b: Option<Self::Inner>,
+        f: F,
+    ) -> Option<Self::Inner> {
+        match (self, b) {
+            (Some(a), Some(b)) => Some((f)(a, b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+}
+
 pub fn egui_angle(ui: &mut Ui, angle: &mut f32) {
     let mut current = rad2deg(*angle);
     let previous = current;
@@ -68,12 +97,10 @@ pub fn egui_usize(ui: &mut Ui, value: &mut usize) {
 #[serde(default)]
 pub struct Parameters {
     pub drift_starts_at: f32,
-    pub time: f32,
     pub force_draw_multiplier: f32,
     pub plot_size: f32,
     pub canvas_size: f32,
     pub view_size: f32,
-    pub steps_per_time: usize,
     pub graph_points_size_limit: usize,
 
     pub physics: PhysicsParameters,
@@ -83,12 +110,10 @@ impl Default for Parameters {
     fn default() -> Self {
         Self {
             drift_starts_at: 0.1,
-            time: 0.5,
             force_draw_multiplier: 4.4,
             plot_size: 170.,
-            canvas_size: 500.,
+            canvas_size: 1000.,
             view_size: 1500.,
-            steps_per_time: 3,
             graph_points_size_limit: 1000,
 
             physics: Default::default(),
@@ -106,10 +131,6 @@ impl Parameters {
                 .min_decimals(0)
                 .max_decimals(3),
         );
-        ui.end_row();
-
-        ui.label("Time step:");
-        egui_0_1(ui, &mut self.time);
         ui.end_row();
 
         ui.label("Force draw mul:");
@@ -138,10 +159,6 @@ impl Parameters {
                 .min_decimals(0)
                 .max_decimals(0),
         );
-        ui.end_row();
-
-        ui.label("Steps per time:");
-        egui_usize(ui, &mut self.steps_per_time);
         ui.end_row();
 
         ui.label("Graph points size:");

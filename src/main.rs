@@ -61,6 +61,6 @@ fn main_app() {
 }
 
 fn main() {
-    drop(main_app());
-    // eframe_template::evolution();
+    // drop(main_app());
+    eframe_template::evolution();
 }

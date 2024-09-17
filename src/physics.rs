@@ -31,6 +31,8 @@ pub struct PhysicsParameters {
     pub time: f32,
 }
 
+const SIMPLE_PHYSICS: bool = true;
+
 impl Default for PhysicsParameters {
     fn default() -> Self {
         Self {
@@ -38,9 +40,9 @@ impl Default for PhysicsParameters {
             gravity: 9.8,
             friction_coefficient: 0.5, // https://www.engineeringtoolbox.com/friction-coefficients-d_778.html
             full_force_on_speed: 30.,
-            acceleration_ratio: 0.3,
+            acceleration_ratio: 0.2,               // 0.6 is good for me
             rolling_resistance_coefficient: 0.006, // car tire, https://en.wikipedia.org/wiki/Rolling_resistance
-            wheel_turn_per_time: 0.01,
+            wheel_turn_per_time: 0.03,             // 0.07 is good for me
             angle_limit: std::f32::consts::PI * 0.2,
             wall_force: 1000.,
             max_speed: 100.,
@@ -290,8 +292,10 @@ impl Car {
             (1.5 * self.angle_acceleration - 0.5 * self.prev_angle_acceleration) * dt;
         self.angle += (1.5 * self.angle_speed - 0.5 * self.prev_angle_speed) * dt;
 
-        self.speed *= 0.99;
-        self.angle_speed *= 0.99;
+        if SIMPLE_PHYSICS {
+            self.speed *= 0.99;
+            self.angle_speed *= 0.99;
+        }
 
         // regular euler
         // self.speed += self.acceleration * dt;
@@ -323,7 +327,7 @@ impl Car {
                 if wheel.angle.abs() > change {
                     wheel.angle += -change * wheel.angle.signum();
                 } else {
-                    wheel.angle_speed = 0.;
+                    wheel.angle = 0.;
                 }
                 wheel.remove_turns = 0.;
             }
@@ -344,7 +348,9 @@ impl Car {
         let dw_dt = torque / self.moment_of_inertia;
         let dx_dt = dir / self.mass;
         self.acceleration += dx_dt;
-        // self.angle_acceleration += dw_dt;
+        if !SIMPLE_PHYSICS {
+            self.angle_acceleration += dw_dt;
+        }
 
         self.forces.push((pos, dir));
     }
@@ -352,14 +358,19 @@ impl Car {
     #[inline(always)]
     pub fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
         debug_assert!(self.cached_for_angle == self.angle);
-        rotate_around_origin_optimized((pos - self.center).to_pos2(), -self.cached_angle_sin, self.cached_angle_cos)
+        rotate_around_origin_optimized(
+            (pos - self.center).to_pos2(),
+            -self.cached_angle_sin,
+            self.cached_angle_cos,
+        )
     }
 
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
     pub fn from_local_coordinates(&self, pos: Pos2) -> Pos2 {
         debug_assert!(self.cached_for_angle == self.angle);
-        rotate_around_origin_optimized(pos, self.cached_angle_sin, self.cached_angle_cos) + self.center.to_vec2()
+        rotate_around_origin_optimized(pos, self.cached_angle_sin, self.cached_angle_cos)
+            + self.center.to_vec2()
     }
 
     pub fn is_inside(&self, mut pos: Pos2) -> bool {
@@ -415,6 +426,10 @@ impl Car {
         drift_observer: &mut impl FnMut(usize, Vec2, f32),
         params: &PhysicsParameters,
     ) {
+        if SIMPLE_PHYSICS {
+            return;
+        }
+
         // about traction: https://www.engineeringtoolbox.com/tractive-effort-d_1783.html
         let traction_force = params.traction_coefficient * self.mass * params.gravity;
         let traction_per_wheel = traction_force / self.wheels.len() as f32;
@@ -493,7 +508,7 @@ impl Car {
 
             total_force *= traction_per_wheel;
 
-            // self.apply_force(self.wheel_pos(wheel), total_force);
+            self.apply_force(self.wheel_pos(wheel), total_force);
         }
 
         std::mem::swap(&mut wheels_temp, &mut self.wheels);
@@ -551,25 +566,27 @@ impl CarInput {
 
 impl Car {
     pub fn process_input(&mut self, input: &CarInput, params: &PhysicsParameters) {
-        self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center) * 10. * input.acceleration;
-        self.angle += 0.02 * input.turn;
-
-        return;
-
-        if input.brake {
-            self.brake();
-        } else if input.acceleration > 0. {
-            self.move_forward(input.acceleration.abs());
+        if SIMPLE_PHYSICS {
+            self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
+                * 10.
+                * input.acceleration;
+            self.angle += 0.02 * input.turn;
         } else {
-            self.move_backwards(input.acceleration.abs());
-        }
+            if input.brake {
+                self.brake();
+            } else if input.acceleration > 0. {
+                self.move_forward(input.acceleration.abs());
+            } else if input.acceleration < 0. {
+                self.move_backwards(input.acceleration.abs());
+            }
 
-        if input.remove_turn {
-            self.remove_turns(params);
-        } else if input.turn > 0. {
-            self.turn_left(input.turn.abs(), params);
-        } else {
-            self.turn_right(input.turn.abs(), params);
+            if input.remove_turn {
+                self.remove_turns(params);
+            } else if input.turn > 0. {
+                self.turn_left(input.turn.abs(), params);
+            } else if input.turn < 0. {
+                self.turn_right(input.turn.abs(), params);
+            }
         }
     }
 
@@ -739,7 +756,11 @@ impl Wall {
 
     #[inline(always)]
     pub fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
-        rotate_around_origin_optimized((pos - self.center).to_pos2(), -self.angle_sin, self.angle_cos)
+        rotate_around_origin_optimized(
+            (pos - self.center).to_pos2(),
+            -self.angle_sin,
+            self.angle_cos,
+        )
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -757,7 +778,8 @@ impl Wall {
         let xf = self.to_local_coordinates(pos).x / self.size.x;
         rotate_around_origin_optimized(
             (vec2(1. + (1. - xf.abs()), 0.) * xf.signum()).to_pos2(),
-            self.angle_sin, self.angle_cos,
+            self.angle_sin,
+            self.angle_cos,
         )
         .to_vec2()
     }
@@ -889,7 +911,7 @@ impl Reward {
         if !self.acquired {
             if (pos - self.center).length() < self.size {
                 self.acquired = true;
-                true  
+                true
             } else {
                 false
             }

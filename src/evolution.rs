@@ -334,31 +334,37 @@ pub fn track_complex() -> Track {
 pub fn track_straight_45() -> Track {
     Track::new(
         "straight_45".to_owned(),
-        walls_from_points(vec![
-    pos2(-77.00, 178.00),
-    pos2(2558.78, -2103.75),
-    pos2(2892.96, -1732.53),
-    pos2(256.05, 574.77),
-    pos2(-86.66, 186.21),
-].into_iter()),
-rewards_from_points(vec![
-    pos2(430.68, 109.81),
-    pos2(478.70, 57.43),
-    pos2(548.55, -1.51),
-    pos2(642.42, -88.83),
-    pos2(725.37, -169.59),
-    pos2(823.60, -256.91),
-    pos2(1048.43, -459.92),
-    pos2(1266.72, -647.64),
-    pos2(1714.21, -1038.38),
-    pos2(1934.68, -1237.02),
-    pos2(2083.11, -1354.89),
-    pos2(2242.46, -1485.87),
-    pos2(2390.90, -1616.84),
-    pos2(2506.59, -1719.43),
-    pos2(2615.74, -1804.57),
-].into_iter()),
-)
+        walls_from_points(
+            vec![
+                pos2(-77.00, 178.00),
+                pos2(2558.78, -2103.75),
+                pos2(2892.96, -1732.53),
+                pos2(256.05, 574.77),
+                pos2(-86.66, 186.21),
+            ]
+            .into_iter(),
+        ),
+        rewards_from_points(
+            vec![
+                pos2(430.68, 109.81),
+                pos2(478.70, 57.43),
+                pos2(548.55, -1.51),
+                pos2(642.42, -88.83),
+                pos2(725.37, -169.59),
+                pos2(823.60, -256.91),
+                pos2(1048.43, -459.92),
+                pos2(1266.72, -647.64),
+                pos2(1714.21, -1038.38),
+                pos2(1934.68, -1237.02),
+                pos2(2083.11, -1354.89),
+                pos2(2242.46, -1485.87),
+                pos2(2390.90, -1616.84),
+                pos2(2506.59, -1719.43),
+                pos2(2615.74, -1804.57),
+            ]
+            .into_iter(),
+        ),
+    )
 }
 
 pub fn get_all_tracks() -> Vec<Track> {
@@ -402,7 +408,7 @@ impl RewardPathProcessor {
             prev,
             max,
             // rewards_acquired,
-            current_segment
+            current_segment,
         ) = (
             &mut self.rewards,
             &mut self.prev_distance,
@@ -414,10 +420,8 @@ impl RewardPathProcessor {
         #[allow(unused_mut)]
         let mut reward = 0.;
 
-        for reward_pos in &mut *rewards {
-            if reward_pos.process_pos(point) {
-                // reward += 1.;
-            }
+        if rewards.last_mut().unwrap().process_pos(point) {
+            reward += 1.;
         }
         // if *rewards_acquired < rewards.len() && rewards[*rewards_acquired].process_pos(point) {
         //     reward += 1.;
@@ -430,9 +434,10 @@ impl RewardPathProcessor {
             let (projection, mut t) = project_to_segment(point, a, b);
             let dist_on_line = (projection - a).length();
             let dist_from_point = (projection - point).length();
+            let is_adequate = dist_from_point < 200.;
             let current_dist = *prev + dist_on_line;
-            if current_dist > *max {
-                reward += (current_dist - *max) * 1. / (dist_from_point + 1.0);
+            if current_dist > *max && is_adequate {
+                // reward += (current_dist - *max) * 1. / (dist_from_point + 1.0);
                 *max = current_dist;
             }
 
@@ -441,18 +446,19 @@ impl RewardPathProcessor {
                 let b2 = rewards[*current_segment + 2].center;
                 let (projection2, _) = project_to_segment(point, a2, b2);
                 let dist_from_point2 = (projection2 - point).length();
-                if dist_from_point2 < dist_from_point {
+                let is_adequate2 = dist_from_point2 < 200.;
+                if dist_from_point2 < dist_from_point && is_adequate2 {
                     t = 1.;
                     let dist_on_line2 = (projection - a2).length();
                     let current_dist2 = *prev + (b - a).length() + dist_on_line2;
                     if current_dist2 > *max {
-                        reward += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
+                        // reward += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
                         *max = current_dist2;
                     }
                 }
             }
 
-            if t == 1. {
+            if t == 1. && is_adequate {
                 *prev += (b - a).length();
                 *current_segment += 1;
             }
@@ -475,7 +481,10 @@ impl RewardPathProcessor {
             let b = self.rewards[self.current_segment + 1].center;
             let (projection, _) = project_to_segment(point, a, b);
             painter.add(Shape::line(
-                vec![to_screen.transform_pos(point), to_screen.transform_pos(projection)],
+                vec![
+                    to_screen.transform_pos(point),
+                    to_screen.transform_pos(projection),
+                ],
                 Stroke::new(1.0, Color32::DARK_GREEN),
             ));
         }
@@ -532,7 +541,12 @@ impl RewardPathProcessor {
     }
 
     pub fn rewards_acquired(&self) -> usize {
-        self.rewards.iter().filter(|x| x.acquired).count()
+        if self.rewards.last().unwrap().acquired {
+            self.rewards.len()
+        } else {
+            0
+        }
+        // self.rewards.iter().filter(|x| x.acquired).count()
         // self.rewards_acquired
     }
 
@@ -551,6 +565,8 @@ pub struct CarSimulation {
     pub reward: f32,
     pub time_passed: f32,
     pub input_values: Vec<f32>,
+    pub next_values: Vec<f32>,
+    pub prev_output: Vec<f32>,
     pub dirs: Vec<Pos2>,
     pub distances: Vec<f32>,
     pub nn: NeuralNetwork,
@@ -562,8 +578,9 @@ impl CarSimulation {
     const PASS_TIME: bool = false;
     const PASS_DIRS: bool = true;
     const PASS_INTERNALS: bool = false;
-    const PASS_NEXT_REWARD_POS: bool = false;
-    const DIRS_N: usize = 7;
+    const PASS_PREV_OUTPUT: bool = false;
+    const DIRS_N: usize = 5;
+    const PASS_NEXT_SIZE: usize = 0;
 
     const CAR_INPUT_SIZE: usize = InternalCarValues::SIZE;
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
@@ -572,7 +589,8 @@ impl CarSimulation {
         Self::PASS_TIME as usize
             + Self::PASS_DIRS as usize * Self::DIRS_N
             + Self::PASS_INTERNALS as usize * Self::CAR_INPUT_SIZE
-            + Self::PASS_NEXT_REWARD_POS as usize * 2
+            + Self::PASS_NEXT_SIZE
+            + Self::PASS_PREV_OUTPUT as usize * Self::CAR_OUTPUT_SIZE
     }
 
     pub fn new(car: Car, nn: NeuralNetwork, walls: Vec<Wall>, rewards: Vec<Reward>) -> Self {
@@ -583,6 +601,8 @@ impl CarSimulation {
             reward: 0.,
             time_passed: 0.,
             input_values: vec![0.; total_input_values],
+            next_values: vec![0.; Self::PASS_NEXT_SIZE],
+            prev_output: vec![0.; Self::CAR_OUTPUT_SIZE],
             dirs: (0..Self::DIRS_N)
                 .map(|i| (i as f32 / (Self::DIRS_N - 1) as f32 - 0.5) * TAU * 2. / 6.)
                 .map(|t| rotate_around_origin(pos2(1., 0.), t))
@@ -640,25 +660,39 @@ impl CarSimulation {
             }
         }
 
-        if Self::PASS_NEXT_REWARD_POS {
-            let rewards = &self.reward_path_processor.rewards;
-            let center = self.car.get_center();
-            /*let reward_pos = if self.reward_path_processor.rewards_acquired < self.reward_path_processor.rewards.len() {
-                rewards[self.reward_path_processor.rewards_acquired].center
-            } else {
-                center
-            };*/
-            let reward_pos = rewards.iter().filter(|x| !x.acquired).map(|x| x.center).next().unwrap_or(center);
-            let reward_dir = reward_pos - center;
-            *input_values_iter.next().unwrap() = reward_dir.y.atan2(reward_dir.x); // angle
-            *input_values_iter.next().unwrap() = reward_dir.length(); // distance
+        #[allow(clippy::absurd_extreme_comparisons)]
+        if Self::PASS_NEXT_SIZE > 0 {
+            for y in &self.next_values {
+                *input_values_iter.next().unwrap() = *y;
+            }
+        }
+
+        if Self::PASS_PREV_OUTPUT {
+            for y in &self.prev_output {
+                *input_values_iter.next().unwrap() = *y;
+            }
         }
 
         debug_assert!(input_values_iter.next().is_none());
 
         let values = self.nn.calc(&self.input_values);
 
-        let input = CarInput::from_f32(values);
+        if Self::PASS_PREV_OUTPUT {
+            values[..Self::CAR_OUTPUT_SIZE]
+                .iter()
+                .zip(self.prev_output.iter_mut())
+                .for_each(|(x, y)| *y = *x);
+        }
+
+        #[allow(clippy::absurd_extreme_comparisons)]
+        if Self::PASS_NEXT_SIZE > 0 {
+            values[Self::CAR_OUTPUT_SIZE - 1..]
+                .iter()
+                .zip(self.next_values.iter_mut())
+                .for_each(|(x, y)| *y = *x);
+        }
+
+        let input = CarInput::from_f32(&values[0..Self::CAR_OUTPUT_SIZE]);
         if !process_user_input(&mut self.car) {
             self.car.process_input(&input, params);
         }
@@ -742,7 +776,8 @@ fn print_evals(evals: &[TrackEvaluation]) {
 }
 
 fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
-    let enable_steps = true;
+    let enable_steps = false;
+    let enable_min_dist = false;
     evals
         .iter()
         .map(|x| {
@@ -763,31 +798,40 @@ fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
         })
         .sum::<f32>()
         / evals.len() as f32
-        + evals
-            .iter()
-            .map(|x| x.distance_percent)
-            .reduce(|a, b| a.min(b))
-            .unwrap_or(0.)
-            * 10000.
+        + if enable_min_dist {
+            evals
+                .iter()
+                .map(|x| x.distance_percent)
+                .reduce(|a, b| a.min(b))
+                .unwrap_or(0.)
+                * 10000.
+        } else {
+            0.
+        }
 }
 
 impl TrackEvaluation {
     fn to_f32(&self) -> f32 {
         self.reward * 10.
             + self.early_finish_percent * 1000.
-            + self.distance_percent * 1000.
+            // + self.distance_percent * 1000.
             // + self.rewards_acquired_percent * 1000.
-            - self.penalty * 10.
+            - self.penalty * 50.
     }
 }
 
 fn eval_nn(nn: NeuralNetwork, params: &PhysicsParameters) -> Vec<TrackEvaluation> {
     let mut result: Vec<TrackEvaluation> = Default::default();
-    for Track { name, walls, rewards } in get_all_tracks() {
+    for Track {
+        name,
+        walls,
+        rewards,
+    } in get_all_tracks()
+    {
         let mut simulation = CarSimulation::new(Default::default(), nn.clone(), walls, rewards);
 
         let mut early_finish_percent = 0.;
-        let steps_quota = 800;
+        let steps_quota = 2000;
         for i in 0..steps_quota {
             if simulation.step(
                 params,
@@ -880,10 +924,12 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
     let params = PhysicsParameters::default();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
-    // let input_done = include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect();
+    let input_done: Vec<(f32, f32)> = include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect();
+    assert_eq!(input_done.len(), nn_len);
+    // let input_new: Vec<(f32, f32)> = vec![(-10., 10.); nn_len];
 
     let now = Instant::now();
-    let mut de = self_adaptive_de(vec![(-10., 10.); nn_len], |pos| {
+    let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(
             from_slice_to_nn(nn_sizes.clone(), pos),
             &PhysicsParameters::default(),
@@ -892,7 +938,7 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
     });
     for pos in 0..100_000 {
         let value = de.iter().next().unwrap();
-        if pos % 100 == 0 && pos != 0 {
+        if pos % 20 == 0 && pos != 0 {
             println!("{pos}. {value}, {:?}", now.elapsed() / pos as u32);
         }
         if pos % 300 == 0 && pos != 0 {
@@ -900,7 +946,7 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
             println!("cost: {}", cost);
             print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), vec), &params));
         }
-        if pos % 10000 == 0 && pos != 0 {
+        if pos % 1000 == 0 && pos != 0 {
             let (_, vec) = de.best().unwrap();
             println!("(vec!{:?}, vec!{:?})", nn_sizes, vec);
         }
@@ -939,7 +985,7 @@ pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
         .population_size(50)
         .enable_plot(PlotOptions::new(0, false))
         .enable_printing(1000)
-        .max_generations(500)
+        .max_generations(200)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(
                 from_dvector_to_nn(nn_sizes.clone(), x),
@@ -962,21 +1008,50 @@ pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
         .unwrap();
 }
 
+ #[inline(always)]
+fn mod_and_calc_vec<T>(
+    x: &mut Vec<f32>,
+    f: &mut dyn FnMut(&Vec<f32>) -> T,
+    idx: usize,
+    y: f32,
+) -> T {
+    let xtmp = x[idx];
+    x[idx] = xtmp + y;
+    let fx1 = (f)(x);
+    x[idx] = xtmp;
+    fx1
+}
+
+fn forward_diff_vec(
+    x: &Vec<f32>,
+    f: &mut dyn FnMut(&Vec<f32>) -> f32,
+) -> Vec<f32> {
+    let step = 0.01;
+    let fx = (f)(x);
+    let mut xt = x.clone();
+    (0..x.len())
+        .map(|i| {
+            let fx1 = mod_and_calc_vec(&mut xt, f, i, step);
+            (fx1 - fx) / step
+        })
+        .collect()
+}
+
 #[allow(unused_imports, unused_variables)]
 fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
+    use argmin::solver::conjugategradient::beta::*;
+    use argmin::solver::conjugategradient::*;
+    use argmin::solver::neldermead::*;
+    use argmin::solver::particleswarm::ParticleSwarm;
+    use argmin::solver::simulatedannealing::*;
     use argmin::{
         core::{CostFunction, Error, Executor, Gradient},
         solver::{linesearch::MoreThuenteLineSearch, quasinewton::BFGS},
     };
-    use argmin::solver::particleswarm::ParticleSwarm;
-    use argmin::solver::simulatedannealing::*;
-    use argmin::solver::neldermead::*;
-    use argmin::solver::conjugategradient::*;
-    use argmin::solver::conjugategradient::beta::*;
     use finitediff::FiniteDiff;
     use ndarray::{Array1, Array2};
-    use rand_xoshiro::Xoshiro256PlusPlus;
     use rand::{distributions::Uniform, prelude::*};
+    use rand_xoshiro::Xoshiro256PlusPlus;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
@@ -1100,8 +1175,12 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
                 .max_iters(15)
                 .target_cost(-10000000.)
         })
-        .add_observer(argmin_observer_slog::SlogLogger::term(), argmin::core::observers::ObserverMode::Always)
-        .run().unwrap();
+        .add_observer(
+            argmin_observer_slog::SlogLogger::term(),
+            argmin::core::observers::ObserverMode::Always,
+        )
+        .run()
+        .unwrap();
 
     // let input_vec = &res.state.param.clone().unwrap();
     let input_vec = &res.state.best_individual.clone().unwrap().position;
@@ -1120,16 +1199,30 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
     println!("{res}");
 }
 
-
 pub fn evolution() {
     let nn_sizes = vec![
         CarSimulation::get_total_input_neurons(),
         10,
-        4,
         CarSimulation::CAR_OUTPUT_SIZE,
     ];
-    evolve_by_differential_evolution(nn_sizes);
+    // evolve_by_differential_evolution(nn_sizes);
     // evolve_by_genetic_algorithm(nn_sizes);
     // evolve_by_cma_es(nn_sizes);
     // evolve_by_bfgs(nn_sizes);
+
+    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let input_done: Vec<f32> = include!("nn.data").1;
+    assert_eq!(input_done.len(), nn_len);
+    let time = Instant::now();
+    let mut count = 0;
+    dbg!(forward_diff_vec(&input_done, &mut |x| {
+        count += 1;
+        let evals = eval_nn(
+            from_slice_to_nn(nn_sizes.clone(), x),
+            &PhysicsParameters::default(),
+        );
+        -sum_evals(&evals)
+    }));
+    dbg!(count);
+    dbg!(time.elapsed());
 }

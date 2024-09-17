@@ -369,7 +369,7 @@ pub fn get_all_tracks() -> Vec<Track> {
         track_smooth_left_and_right(),
         track_turn_left_90(),
         track_turn_left_180(),
-        // track_turn_around(),
+        track_turn_around(),
         track_complex(),
     ]
     .into_iter()
@@ -379,7 +379,8 @@ pub fn get_all_tracks() -> Vec<Track> {
 
 pub struct RewardPathProcessor {
     rewards: Vec<Reward>,
-    current_pos: usize,
+    // rewards_acquired: usize,
+    current_segment: usize,
     prev_distance: f32,
     max_distance: f32,
 }
@@ -388,64 +389,93 @@ impl RewardPathProcessor {
     pub fn new(rewards: Vec<Reward>) -> Self {
         Self {
             rewards,
-            current_pos: 0,
+            // rewards_acquired: 0,
+            current_segment: 0,
             prev_distance: 0.,
             max_distance: 0.,
         }
     }
 
     fn process_point(&mut self, point: Pos2) -> f32 {
-        if self.rewards.len() < 2 {
-            return 0.;
-        }
-
-        let (rew, pos, prev, max) = (
+        let (
+            rewards,
+            prev,
+            max,
+            // rewards_acquired,
+            current_segment
+        ) = (
             &mut self.rewards,
-            &mut self.current_pos,
             &mut self.prev_distance,
             &mut self.max_distance,
+            // &mut self.rewards_acquired,
+            &mut self.current_segment,
         );
 
-        let to_return = rew[*pos].process_pos(point) + rew[*pos + 1].process_pos(point);
+        #[allow(unused_mut)]
+        let mut reward = 0.;
 
-        let (pos1, _t1) = project_to_segment(point, rew[*pos].center, rew[*pos + 1].center);
-
-        let current = *prev + (pos1 - rew[*pos].center).length();
-        if current > *max {
-            // to_return += (current - *max) * 1. / ((pos1 - point).length() + 1.0);
-            *max = current;
+        for reward_pos in &mut *rewards {
+            if reward_pos.process_pos(point) {
+                // reward += 1.;
+            }
         }
+        // if *rewards_acquired < rewards.len() && rewards[*rewards_acquired].process_pos(point) {
+        //     reward += 1.;
+        //     *rewards_acquired += 1;
+        // }
 
-        if *pos < rew.len() - 2 {
-            let (pos2, _t2) = project_to_segment(point, rew[*pos + 1].center, rew[*pos + 2].center);
-            if (point - pos2).length() < (point - pos1).length() && rew[*pos + 1].acquired {
-                *prev += (rew[*pos].center - rew[*pos + 1].center).length();
-                let current = *prev + (pos2 - rew[*pos + 1].center).length();
-                if current > *max {
-                    // to_return += (current - *max) * 1. / ((pos2 - point).length() + 1.0);
-                    *max = current;
+        if 2 <= rewards.len() && *current_segment + 1 < rewards.len() {
+            let a = rewards[*current_segment].center;
+            let b = rewards[*current_segment + 1].center;
+            let (projection, mut t) = project_to_segment(point, a, b);
+            let dist_on_line = (projection - a).length();
+            let dist_from_point = (projection - point).length();
+            let current_dist = *prev + dist_on_line;
+            if current_dist > *max {
+                reward += (current_dist - *max) * 1. / (dist_from_point + 1.0);
+                *max = current_dist;
+            }
+
+            if *current_segment + 2 < rewards.len() {
+                let a2 = rewards[*current_segment + 1].center;
+                let b2 = rewards[*current_segment + 2].center;
+                let (projection2, _) = project_to_segment(point, a2, b2);
+                let dist_from_point2 = (projection2 - point).length();
+                if dist_from_point2 < dist_from_point {
+                    t = 1.;
+                    let dist_on_line2 = (projection - a2).length();
+                    let current_dist2 = *prev + (b - a).length() + dist_on_line2;
+                    if current_dist2 > *max {
+                        reward += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
+                        *max = current_dist2;
+                    }
                 }
-                self.current_pos += 1;
+            }
+
+            if t == 1. {
+                *prev += (b - a).length();
+                *current_segment += 1;
             }
         }
 
-        to_return
+        reward
     }
 
     fn reset(&mut self) {
-        self.current_pos = 0;
+        // self.rewards_acquired = 0;
+        self.current_segment = 0;
         self.prev_distance = 0.;
         self.max_distance = 0.;
         self.rewards.iter_mut().for_each(|x| x.acquired = false);
     }
 
     fn draw(&self, point: Pos2, painter: &Painter, to_screen: &RectTransform) {
-        if self.rewards.len() >= 2 {
-            let a = self.rewards[self.current_pos].center;
-            let b = self.rewards[self.current_pos + 1].center;
-            let (pos, _) = project_to_segment(point, a, b);
+        if 2 <= self.rewards.len() && self.current_segment + 1 < self.rewards.len() {
+            let a = self.rewards[self.current_segment].center;
+            let b = self.rewards[self.current_segment + 1].center;
+            let (projection, _) = project_to_segment(point, a, b);
             painter.add(Shape::line(
-                vec![to_screen.transform_pos(point), to_screen.transform_pos(pos)],
+                vec![to_screen.transform_pos(point), to_screen.transform_pos(projection)],
                 Stroke::new(1.0, Color32::DARK_GREEN),
             ));
         }
@@ -458,7 +488,7 @@ impl RewardPathProcessor {
                 ],
                 Stroke::new(
                     1.0,
-                    if i < self.current_pos {
+                    if i < self.current_segment {
                         Color32::DARK_RED
                     } else {
                         Color32::DARK_GREEN
@@ -498,13 +528,12 @@ impl RewardPathProcessor {
 
     pub fn all_acquired(&self) -> bool {
         self.rewards_acquired() == self.rewards.len()
+        // self.rewards_acquired == self.rewards.len()
     }
 
     pub fn rewards_acquired(&self) -> usize {
-        self.rewards
-            .iter()
-            .map(|x| if x.acquired { 1 } else { 0 })
-            .sum()
+        self.rewards.iter().filter(|x| x.acquired).count()
+        // self.rewards_acquired
     }
 
     pub fn rewards_acquired_percent(&self) -> f32 {
@@ -530,17 +559,20 @@ pub struct CarSimulation {
 }
 
 impl CarSimulation {
-    const PASS_TIME: bool = true;
+    const PASS_TIME: bool = false;
     const PASS_DIRS: bool = true;
     const PASS_INTERNALS: bool = false;
+    const PASS_NEXT_REWARD_POS: bool = false;
+    const DIRS_N: usize = 7;
+
     const CAR_INPUT_SIZE: usize = InternalCarValues::SIZE;
-    const DIRS_N: usize = 5;
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
 
     pub fn get_total_input_neurons() -> usize {
         Self::PASS_TIME as usize
             + Self::PASS_DIRS as usize * Self::DIRS_N
             + Self::PASS_INTERNALS as usize * Self::CAR_INPUT_SIZE
+            + Self::PASS_NEXT_REWARD_POS as usize * 2
     }
 
     pub fn new(car: Car, nn: NeuralNetwork, walls: Vec<Wall>, rewards: Vec<Reward>) -> Self {
@@ -608,6 +640,20 @@ impl CarSimulation {
             }
         }
 
+        if Self::PASS_NEXT_REWARD_POS {
+            let rewards = &self.reward_path_processor.rewards;
+            let center = self.car.get_center();
+            /*let reward_pos = if self.reward_path_processor.rewards_acquired < self.reward_path_processor.rewards.len() {
+                rewards[self.reward_path_processor.rewards_acquired].center
+            } else {
+                center
+            };*/
+            let reward_pos = rewards.iter().filter(|x| !x.acquired).map(|x| x.center).next().unwrap_or(center);
+            let reward_dir = reward_pos - center;
+            *input_values_iter.next().unwrap() = reward_dir.y.atan2(reward_dir.x); // angle
+            *input_values_iter.next().unwrap() = reward_dir.length(); // distance
+        }
+
         debug_assert!(input_values_iter.next().is_none());
 
         let values = self.nn.calc(&self.input_values);
@@ -637,9 +683,11 @@ impl CarSimulation {
             self.time_passed += time;
         }
 
-        self.reward += self
+        let reward = self
             .reward_path_processor
-            .process_point(self.car.get_center()) * 10. / self.time_passed;
+            .process_point(self.car.get_center());
+
+        self.reward += reward * 10. / self.time_passed;
         false
     }
 
@@ -694,7 +742,7 @@ fn print_evals(evals: &[TrackEvaluation]) {
 }
 
 fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
-    let enable_steps = false;
+    let enable_steps = true;
     evals
         .iter()
         .map(|x| {
@@ -725,10 +773,10 @@ fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
 
 impl TrackEvaluation {
     fn to_f32(&self) -> f32 {
-        self.reward * 100.
+        self.reward * 10.
             + self.early_finish_percent * 1000.
             + self.distance_percent * 1000.
-            + self.rewards_acquired_percent * 1000.
+            // + self.rewards_acquired_percent * 1000.
             - self.penalty * 10.
     }
 }
@@ -739,7 +787,7 @@ fn eval_nn(nn: NeuralNetwork, params: &PhysicsParameters) -> Vec<TrackEvaluation
         let mut simulation = CarSimulation::new(Default::default(), nn.clone(), walls, rewards);
 
         let mut early_finish_percent = 0.;
-        let steps_quota = 2000;
+        let steps_quota = 800;
         for i in 0..steps_quota {
             if simulation.step(
                 params,
@@ -769,12 +817,21 @@ fn eval_nn(nn: NeuralNetwork, params: &PhysicsParameters) -> Vec<TrackEvaluation
     result
 }
 
-fn from_pos_to_nn(sizes: Vec<usize>, pos: &[f32]) -> NeuralNetwork {
+fn from_slice_to_nn(sizes: Vec<usize>, pos: &[f32]) -> NeuralNetwork {
     let mut nn = NeuralNetwork::new(sizes);
     nn.get_values_mut()
         .iter_mut()
         .zip(pos.iter())
         .for_each(|(x, y)| *x = *y);
+    nn
+}
+
+fn from_slice_to_nn_f64(sizes: Vec<usize>, pos: &[f64]) -> NeuralNetwork {
+    let mut nn = NeuralNetwork::new(sizes);
+    nn.get_values_mut()
+        .iter_mut()
+        .zip(pos.iter())
+        .for_each(|(x, y)| *x = *y as f32);
     nn
 }
 
@@ -823,10 +880,12 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
     let params = PhysicsParameters::default();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
+    // let input_done = include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect();
+
     let now = Instant::now();
-    let mut de = self_adaptive_de(include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect(), |pos| {
+    let mut de = self_adaptive_de(vec![(-10., 10.); nn_len], |pos| {
         let evals = eval_nn(
-            from_pos_to_nn(nn_sizes.clone(), pos),
+            from_slice_to_nn(nn_sizes.clone(), pos),
             &PhysicsParameters::default(),
         );
         -sum_evals(&evals)
@@ -836,19 +895,20 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
         if pos % 100 == 0 && pos != 0 {
             println!("{pos}. {value}, {:?}", now.elapsed() / pos as u32);
         }
-        if pos % 1000 == 0 && pos != 0 {
+        if pos % 300 == 0 && pos != 0 {
             let (cost, vec) = de.best().unwrap();
             println!("cost: {}", cost);
-            print_evals(&eval_nn(from_pos_to_nn(nn_sizes.clone(), vec), &params));
-            if pos % 10000 == 0 && pos != 0 {
-                println!("(vec!{:?}, vec!{:?})", nn_sizes, vec);
-            }
+            print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), vec), &params));
+        }
+        if pos % 10000 == 0 && pos != 0 {
+            let (_, vec) = de.best().unwrap();
+            println!("(vec!{:?}, vec!{:?})", nn_sizes, vec);
         }
     }
     // show the result
     let (cost, pos) = de.best().unwrap();
     println!("cost: {}", cost);
-    print_evals(&eval_nn(from_pos_to_nn(nn_sizes.clone(), pos), &params));
+    print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), pos), &params));
     println!("(vec!{:?}, vec!{:?})", nn_sizes, pos);
 }
 
@@ -902,13 +962,174 @@ pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
         .unwrap();
 }
 
+#[allow(unused_imports, unused_variables)]
+fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
+    use argmin::{
+        core::{CostFunction, Error, Executor, Gradient},
+        solver::{linesearch::MoreThuenteLineSearch, quasinewton::BFGS},
+    };
+    use argmin::solver::particleswarm::ParticleSwarm;
+    use argmin::solver::simulatedannealing::*;
+    use argmin::solver::neldermead::*;
+    use argmin::solver::conjugategradient::*;
+    use argmin::solver::conjugategradient::beta::*;
+    use finitediff::FiniteDiff;
+    use ndarray::{Array1, Array2};
+    use rand_xoshiro::Xoshiro256PlusPlus;
+    use rand::{distributions::Uniform, prelude::*};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct NnStruct {
+        nn_sizes: Vec<usize>,
+
+        rng: Arc<Mutex<Xoshiro256PlusPlus>>,
+    }
+
+    #[inline(always)]
+    fn mod_and_calc_ndarray_f64<T>(
+        x: &mut ndarray::Array1<f64>,
+        f: &dyn Fn(&ndarray::Array1<f64>) -> T,
+        idx: usize,
+        y: f64,
+    ) -> T {
+        let xtmp = x[idx];
+        x[idx] = xtmp + y;
+        let fx1 = (f)(x);
+        x[idx] = xtmp;
+        fx1
+    }
+
+    fn forward_diff_ndarray_f64(
+        x: &ndarray::Array1<f64>,
+        f: &dyn Fn(&ndarray::Array1<f64>) -> f64,
+    ) -> ndarray::Array1<f64> {
+        let step = 0.2;
+        let fx = (f)(x);
+        let mut xt = x.clone();
+        (0..x.len())
+            .map(|i| {
+                let fx1 = mod_and_calc_ndarray_f64(&mut xt, f, i, step);
+                (fx1 - fx) / step
+            })
+            .collect()
+    }
+
+    impl CostFunction for NnStruct {
+        type Param = Array1<f64>;
+        type Output = f64;
+
+        fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
+            let evals = eval_nn(
+                from_slice_to_nn_f64(self.nn_sizes.clone(), &p.to_vec()),
+                &PhysicsParameters::default(),
+            );
+            Ok(-sum_evals(&evals) as f64)
+        }
+    }
+    impl Gradient for NnStruct {
+        type Param = Array1<f64>;
+        type Gradient = Array1<f64>;
+
+        fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
+            Ok(forward_diff_ndarray_f64(p, &|x| {
+                let evals = eval_nn(
+                    from_slice_to_nn_f64(self.nn_sizes.clone(), &x.to_vec()),
+                    &PhysicsParameters::default(),
+                );
+                -sum_evals(&evals) as f64
+            }))
+        }
+    }
+
+    impl Anneal for NnStruct {
+        type Param = Array1<f64>;
+        type Output = Array1<f64>;
+        type Float = f64;
+
+        /// Anneal a parameter vector
+        fn anneal(&self, param: &Array1<f64>, temp: f64) -> Result<Array1<f64>, Error> {
+            let mut param_n = param.clone();
+            let mut rng = self.rng.lock().unwrap();
+            let distr = Uniform::from(0..param.len());
+            // Perform modifications to a degree proportional to the current temperature `temp`.
+            for _ in 0..(temp.floor() as u64 + 1) {
+                // Compute random index of the parameter vector using the supplied random number
+                // generator.
+                let idx = rng.sample(distr);
+
+                // Compute random number in [0.1, 0.1].
+                let val = rng.sample(Uniform::new_inclusive(-0.1, 0.1));
+
+                // modify previous parameter value at random position `idx` by `val`
+                param_n[idx] += val;
+            }
+            Ok(param_n)
+        }
+    }
+
+    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let cost = NnStruct {
+        nn_sizes: nn_sizes.clone(),
+        rng: Arc::new(Mutex::new(Xoshiro256PlusPlus::from_entropy())),
+    };
+    let mut rng = thread_rng();
+    let init_param: Array1<f64> = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect();
+    // let init_param: Array1<f64> = vec![4.688306097853486, 0.6204017367645083, -7.859635664475743, -7.635218409421679, 7.717967786436421, -0.54923420739562, 8.066439164645534, -8.897632538763437, 9.865049574233668, -4.068853301884416, 9.995907498968416, -5.9458871673975295, 9.014559744030446, -1.9768150622806946, -0.43603010816141996, 7.763405146364665, -6.145013892767182, -3.3949860939939436, -0.5952302737544315, -0.03173308202889302, -10.0, 3.5596750513168534, -3.1339574977700995, -1.7263951533717297, -5.803931353512225, -6.606952410815025, 9.751160709892426, -7.052545480460957, -9.608931236527063, -9.971011080222466, -9.089350456184636, -4.675328307219448, -4.765826891536515, 1.9106005956427523, 7.2317476442113655, 5.197172524515189, 0.7044440726356216, -3.0410425227088056, -7.00246850779088, -0.914321933341788, -6.36322586787105, -0.40145501100564773, -6.783476137785582, 8.93626982172199, -0.0024591707864168866, -10.0, -9.910070499266546, -2.164459640722657, 4.1816780767118145, -7.754302079816634, -8.802416740030084, 0.08398342448757656, -9.669314963459694, 1.8973137389881352, -8.470348743142802, -5.627227755070736, 1.7625263817770682, -10.0].into_iter().map(|x| x + rng.gen_range(-0.05..0.05)).collect();
+
+    let min_param: Array1<f64> = (0..nn_len).map(|_| -10.).collect();
+    let max_param: Array1<f64> = (0..nn_len).map(|_| 10.).collect();
+    let init_hessian: Array2<f64> = Array2::eye(nn_len);
+    // let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
+    // let solver = BFGS::new(linesearch);
+    let solver = ParticleSwarm::new((min_param, max_param), 100);
+    // let solver = NelderMead::new((0..nn_len+1).map(|_| (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Array1<f64>>()).collect());
+    // let solver = NonlinearConjugateGradient::new(linesearch, FletcherReeves::new());
+    // let solver = SimulatedAnnealing::new(2000.0).unwrap()
+    //     // .with_temp_func(SATempFunc::Boltzmann)
+    //     .with_stall_best(1000)
+    //     .with_stall_accepted(1000)
+    //     .with_reannealing_fixed(300)
+    //     .with_reannealing_accepted(300)
+    //     .with_reannealing_best(300);
+    let res = Executor::new(cost.clone(), solver)
+        .configure(|state| {
+            state
+                // .param(init_param)
+                // .inv_hessian(init_hessian)
+                .max_iters(15)
+                .target_cost(-10000000.)
+        })
+        .add_observer(argmin_observer_slog::SlogLogger::term(), argmin::core::observers::ObserverMode::Always)
+        .run().unwrap();
+
+    // let input_vec = &res.state.param.clone().unwrap();
+    let input_vec = &res.state.best_individual.clone().unwrap().position;
+    // let input_vec = nn_sizes.clone(), &res.state.best_param.clone().unwrap().to_vec();
+
+    let time = Instant::now();
+    dbg!(cost.gradient(input_vec));
+    dbg!(time.elapsed());
+
+    let evals = eval_nn(
+        from_slice_to_nn_f64(nn_sizes.clone(), &input_vec.to_vec()),
+        &PhysicsParameters::default(),
+    );
+    print_evals(&evals);
+
+    println!("{res}");
+}
+
+
 pub fn evolution() {
     let nn_sizes = vec![
         CarSimulation::get_total_input_neurons(),
+        10,
         4,
         CarSimulation::CAR_OUTPUT_SIZE,
     ];
     evolve_by_differential_evolution(nn_sizes);
     // evolve_by_genetic_algorithm(nn_sizes);
     // evolve_by_cma_es(nn_sizes);
+    // evolve_by_bfgs(nn_sizes);
 }

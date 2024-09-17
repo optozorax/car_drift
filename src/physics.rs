@@ -885,16 +885,16 @@ impl Reward {
         }
     }
 
-    pub fn process_pos(&mut self, pos: Pos2) -> f32 {
+    pub fn process_pos(&mut self, pos: Pos2) -> bool {
         if !self.acquired {
             if (pos - self.center).length() < self.size {
                 self.acquired = true;
-                1.
+                true  
             } else {
-                0.
+                false
             }
         } else {
-            0.
+            false
         }
     }
 

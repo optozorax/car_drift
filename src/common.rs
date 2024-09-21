@@ -1,6 +1,5 @@
 use crate::math::deg2rad;
 use crate::math::rad2deg;
-use crate::physics::PhysicsParameters;
 
 use egui::DragValue;
 
@@ -95,18 +94,16 @@ pub fn egui_usize(ui: &mut Ui, value: &mut usize) {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[serde(default)]
-pub struct Parameters {
+pub struct InterfaceParameters {
     pub drift_starts_at: f32,
     pub force_draw_multiplier: f32,
     pub plot_size: f32,
     pub canvas_size: f32,
     pub view_size: f32,
     pub graph_points_size_limit: usize,
-
-    pub physics: PhysicsParameters,
 }
 
-impl Default for Parameters {
+impl Default for InterfaceParameters {
     fn default() -> Self {
         Self {
             drift_starts_at: 0.1,
@@ -115,13 +112,11 @@ impl Default for Parameters {
             canvas_size: 1000.,
             view_size: 1500.,
             graph_points_size_limit: 1000,
-
-            physics: Default::default(),
         }
     }
 }
 
-impl Parameters {
+impl InterfaceParameters {
     pub fn grid_ui(&mut self, ui: &mut Ui) {
         ui.label("Drift at:");
         ui.add(
@@ -176,8 +171,6 @@ impl Parameters {
 
                 ui.separator();
                 ui.end_row();
-
-                self.physics.grid_ui(ui);
             });
     }
 }

@@ -10,6 +10,7 @@ mod physics;
 mod storage;
 pub use app::TemplateApp;
 pub use evolution::evolution;
+pub use evolution::RUN_EVOLUTION;
 
 #[macro_export]
 macro_rules! error {

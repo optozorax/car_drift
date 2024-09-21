@@ -668,13 +668,13 @@ impl Car {
         }));
     }
 
-    pub fn draw_forces(&self, painter: &Painter, params: &Parameters, to_screen: &RectTransform) {
+    pub fn draw_forces(&self, painter: &Painter, params: &InterfaceParameters, params_phys: &PhysicsParameters, to_screen: &RectTransform) {
         for (pos, dir) in &self.forces {
             painter.add(Shape::LineSegment {
                 points: [
                     to_screen.transform_pos(*pos),
                     to_screen.transform_pos(
-                        *pos + *dir * params.physics.time * params.force_draw_multiplier,
+                        *pos + *dir * params_phys.time * params.force_draw_multiplier,
                     ),
                 ],
                 stroke: Stroke::new(1.0, Color32::from_rgb(0, 0, 0)).into(),

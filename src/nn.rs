@@ -23,7 +23,7 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 fn relu1(x: f32) -> f32 {
-    x.max(0.).min(10.)
+    x.clamp(0., 10.)
 }
 
 fn relu2(x: f32) -> f32 {
@@ -31,7 +31,7 @@ fn relu2(x: f32) -> f32 {
         x
     } else {
         x * 0.1
-    }.max(-10.).min(10.)
+    }.clamp(-10., 10.)
 }
 
 fn activation(x: f32) -> f32 {

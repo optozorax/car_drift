@@ -1,5 +1,4 @@
-use rand::SeedableRng;
-use rand::rngs::StdRng;
+use std::collections::HashSet;
 use crate::common::pairs;
 use crate::common::*;
 use crate::math::*;
@@ -12,7 +11,6 @@ use crate::physics::Reward;
 use crate::physics::Wall;
 use crate::physics::*;
 use cmaes::DVector;
-use cmaes::PlotOptions;
 use core::f32::consts::TAU;
 use differential_evolution::self_adaptive_de;
 use egui::emath::RectTransform;
@@ -26,9 +24,64 @@ use egui::Stroke;
 use egui::Vec2;
 use rand::thread_rng;
 use rand::Rng;
-use spiril::population::Population;
-use spiril::unit::Unit;
 use std::time::Instant;
+
+// Number from 0 to 1
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct Clamped { 
+    value: f32,
+    start: f32,
+    end: f32,
+}
+
+impl Clamped {
+    pub fn new(value: f32, start: f32, end: f32) -> Self {
+        Self { value, start, end }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct SimulationParameters {
+    tracks_enabled: HashSet<String>,
+    tracks_enable_mirror: bool, // mirrors track horizontally
+
+    mutate_car_enable: bool, // mutates position of a car
+    mutate_car_count: usize, // hom much times run same track with mutation
+    mutate_car_angle_range: Clamped, // ratio to PI/4
+
+    rewards_enable_early_acquire: bool, // if disabled, then only last reward works
+    rewards_add_each_acquire: bool, // to get 1 when reward is acquired
+    rewards_enable_distance_integral: bool,
+    rewards_progress_distance: Clamped, // ratio from 0 to 1000
+
+    simulation_stop_penalty: Clamped, // ratio from 0 to 50
+    simulation_scale_reward_to_time: bool, // if reward acquired earlier, it will be bigger
+    simulation_steps_quota: usize, // reasonable values from 1000 to 3000
+    
+    eval_skip_passed_tracks: bool,
+    eval_add_min_distance: bool,
+    eval_reward: Clamped, // ratio from 0 to 5000
+    eval_early_finish: Clamped, // ratio from 0 to 5000
+    eval_distance: Clamped, // ratio from 0 to 5000
+    eval_acquired: Clamped, // ratio from 0 to 5000
+    eval_penalty: Clamped, // ratio from 0 to 5000
+
+    nn_pass_time: bool,
+    nn_pass_distance: bool,
+    nn_pass_dirs: bool,
+    nn_pass_internals: bool,
+    nn_pass_prev_output: bool,
+    nn_dirs_size: usize,
+    nn_pass_next_size: usize,
+    nn_hidden_layers: Vec<usize>,
+    nn_inv_distance: bool,
+}
+
+impl SimulationParameters {
+    fn get_nn_sizes(&self) -> Vec<usize> {
+        std::iter::once(CarSimulation::get_total_input_neurons(self)).chain(self.nn_hidden_layers.iter().copied()).chain(std::iter::once(CarSimulation::CAR_OUTPUT_SIZE)).collect()
+    }
+}
 
 pub fn mirror_horizontally(mut input: Track) -> Track {
     let car_center = 250.;
@@ -61,10 +114,10 @@ impl Track {
     }
 }
 
-pub fn mutate_car(mut car: Car) -> Car {
-    let angle_range = 0.5;
+pub fn mutate_car(mut car: Car, params: &SimulationParameters) -> Car {
+    let angle_range = params.mutate_car_angle_range.value;
     let angle_speed_range = 0.1;
-    let pos_range = 50.;
+    let pos_range = 0.5;
     let speed_range = 0.01;
     let mut rng = thread_rng();
     car.change_position(
@@ -387,22 +440,18 @@ pub fn track_straight_45() -> Track {
 pub fn get_all_tracks() -> Vec<Track> {
     vec![
         track_straight_line(),
-        // track_straight_45(),
+        track_straight_45(),
         track_turn_right_smooth(),
         track_smooth_left_and_right(),
         track_turn_left_90(),
         track_turn_left_180(),
-        // // track_turn_around(),
+        // track_turn_around(),
         track_complex(),
     ]
-    .into_iter()
-    .flat_map(|x| vec![x.clone(), mirror_horizontally(x)].into_iter())
-    .collect()
 }
 
 pub struct RewardPathProcessor {
     rewards: Vec<Reward>,
-    // rewards_acquired: usize,
     current_segment: usize,
     prev_distance: f32,
     max_distance: f32,
@@ -414,43 +463,44 @@ impl RewardPathProcessor {
     pub fn new(rewards: Vec<Reward>) -> Self {
         Self {
             rewards,
-            // rewards_acquired: 0,
             current_segment: 0,
             prev_distance: 0.,
             max_distance: 0.,
         }
     }
 
-    fn process_point(&mut self, point: Pos2) -> f32 {
+    fn process_point(&mut self, point: Pos2, params: &SimulationParameters) -> f32 {
         let (
             rewards,
             prev,
             max,
-            // rewards_acquired,
             current_segment,
         ) = (
             &mut self.rewards,
             &mut self.prev_distance,
             &mut self.max_distance,
-            // &mut self.rewards_acquired,
             &mut self.current_segment,
         );
 
         #[allow(unused_mut)]
         let mut reward_sum = 0.;
 
-        if Self::ENABLE_EARLY_ACQUIRE {
+        if params.rewards_enable_early_acquire {
             let mut to_acquire_before: Option<usize> = None;
             for (pos, reward) in rewards.iter_mut().enumerate() {
                 if !reward.acquired && reward.process_pos(point) {
-                    reward_sum += 1.;
+                    if params.rewards_add_each_acquire {
+                        reward_sum += 1.;
+                    }
                     to_acquire_before = Some(pos);
                 }
             }
             if let Some(to_acquire_before) = to_acquire_before {
                 for reward in rewards.iter_mut().take(to_acquire_before) {
                     if !reward.acquired {
-                        reward_sum += 1.;
+                        if params.rewards_add_each_acquire {
+                            reward_sum += 1.;
+                        }
                         reward.acquired = true;
                     }
                 }
@@ -474,10 +524,12 @@ impl RewardPathProcessor {
             let (projection, mut t) = project_to_segment(point, a, b);
             let dist_on_line = (projection - a).length();
             let dist_from_point = (projection - point).length();
-            let is_adequate = dist_from_point < 200.;
+            let is_adequate = dist_from_point < params.rewards_progress_distance.value;
             let current_dist = *prev + dist_on_line;
             if current_dist > *max && is_adequate {
-                // reward += (current_dist - *max) * 1. / (dist_from_point + 1.0);
+                if params.rewards_enable_distance_integral {
+                    reward_sum += (current_dist - *max) * 1. / (dist_from_point + 1.0);
+                }
                 *max = current_dist;
             }
 
@@ -486,13 +538,15 @@ impl RewardPathProcessor {
                 let b2 = rewards[*current_segment + 2].center;
                 let (projection2, _) = project_to_segment(point, a2, b2);
                 let dist_from_point2 = (projection2 - point).length();
-                let is_adequate2 = dist_from_point2 < 200.;
+                let is_adequate2 = dist_from_point2 < params.rewards_progress_distance.value;
                 if dist_from_point2 < dist_from_point && is_adequate2 {
                     t = 1.;
                     let dist_on_line2 = (projection - a2).length();
                     let current_dist2 = *prev + (b - a).length() + dist_on_line2;
                     if current_dist2 > *max {
-                        // reward += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
+                        if params.rewards_enable_distance_integral {
+                            reward_sum += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
+                        }
                         *max = current_dist2;
                     }
                 }
@@ -508,7 +562,6 @@ impl RewardPathProcessor {
     }
 
     fn reset(&mut self) {
-        // self.rewards_acquired = 0;
         self.current_segment = 0;
         self.prev_distance = 0.;
         self.max_distance = 0.;
@@ -575,26 +628,25 @@ impl RewardPathProcessor {
         self.max_distance / self.max_possible_distance()
     }
 
-    pub fn all_acquired(&self) -> bool {
-        self.rewards_acquired() == self.rewards.len()
-        // self.rewards_acquired == self.rewards.len()
+    pub fn all_acquired(&self, params: &SimulationParameters) -> bool {
+        self.rewards_acquired(params) == self.rewards.len()
     }
 
-    pub fn rewards_acquired(&self) -> usize {
-        if self.rewards.last().unwrap().acquired {
+    pub fn rewards_acquired(&self, params: &SimulationParameters) -> usize {
+        if params.rewards_enable_early_acquire {
+            self.rewards.iter().filter(|x| x.acquired).count()
+        } else if self.rewards.last().unwrap().acquired {
             self.rewards.len()
         } else {
             0
         }
-        // self.rewards.iter().filter(|x| x.acquired).count()
-        // self.rewards_acquired
     }
 
-    pub fn rewards_acquired_percent(&self) -> f32 {
+    pub fn rewards_acquired_percent(&self, params: &SimulationParameters) -> f32 {
         if self.rewards.is_empty() {
             0.
         } else {
-            self.rewards_acquired() as f32 / self.rewards.len() as f32
+            self.rewards_acquired(params) as f32 / self.rewards.len() as f32
         }
     }
 }
@@ -615,38 +667,30 @@ pub struct CarSimulation {
 }
 
 impl CarSimulation {
-    const PASS_TIME: bool = false;
-    const PASS_DISTANCE: bool = false;
-    const PASS_DIRS: bool = true;
-    const PASS_INTERNALS: bool = true;
-    const PASS_PREV_OUTPUT: bool = false;
-    const DIRS_N: usize = 10;
-    const PASS_NEXT_SIZE: usize = 0;
-
     const CAR_INPUT_SIZE: usize = InternalCarValues::SIZE;
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
 
-    pub fn get_total_input_neurons() -> usize {
-        Self::PASS_TIME as usize
-            + Self::PASS_DISTANCE as usize
-            + Self::PASS_DIRS as usize * Self::DIRS_N
-            + Self::PASS_INTERNALS as usize * Self::CAR_INPUT_SIZE
-            + Self::PASS_NEXT_SIZE
-            + Self::PASS_PREV_OUTPUT as usize * Self::CAR_OUTPUT_SIZE
+    pub fn get_total_input_neurons(params: &SimulationParameters) -> usize {
+        params.nn_pass_time as usize
+            + params.nn_pass_distance as usize
+            + params.nn_pass_dirs as usize * params.nn_dirs_size
+            + params.nn_pass_internals as usize * Self::CAR_INPUT_SIZE
+            + params.nn_pass_next_size
+            + params.nn_pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
     }
 
-    pub fn new(car: Car, nn: NeuralNetwork, walls: Vec<Wall>, rewards: Vec<Reward>) -> Self {
-        let total_input_values = Self::get_total_input_neurons();
+    pub fn new(car: Car, nn: NeuralNetwork, walls: Vec<Wall>, rewards: Vec<Reward>, params: &SimulationParameters) -> Self {
+        let total_input_values = Self::get_total_input_neurons(params);
         Self {
             car,
             penalty: 0.,
             reward: 0.,
             time_passed: 0.,
             input_values: vec![0.; total_input_values],
-            next_values: vec![0.; Self::PASS_NEXT_SIZE],
+            next_values: vec![0.; params.nn_pass_next_size],
             prev_output: vec![0.; Self::CAR_OUTPUT_SIZE],
-            dirs: (0..Self::DIRS_N)
-                .map(|i| (i as f32 / (Self::DIRS_N - 1) as f32 - 0.5) * TAU * 2. / 6.)
+            dirs: (0..params.nn_dirs_size)
+                .map(|i| (i as f32 / (params.nn_dirs_size - 1) as f32 - 0.5) * TAU * 2. / 6.)
                 .map(|t| rotate_around_origin(pos2(1., 0.), t))
                 .collect(),
             distances: vec![0.; total_input_values],
@@ -666,7 +710,8 @@ impl CarSimulation {
 
     pub fn step(
         &mut self,
-        params: &PhysicsParameters,
+        params_phys: &PhysicsParameters,
+        params_sim: &SimulationParameters,
         observe_distance: &mut impl FnMut(Pos2, Pos2, f32),
         process_user_input: &mut impl FnMut(&mut Car) -> bool,
         drift_observer: &mut impl FnMut(usize, Vec2, f32),
@@ -674,15 +719,15 @@ impl CarSimulation {
     ) -> bool {
         let mut input_values_iter = self.input_values.iter_mut();
 
-        if Self::PASS_TIME {
+        if params_sim.nn_pass_time {
             *input_values_iter.next().unwrap() = self.time_passed;
         }
 
-        if Self::PASS_TIME {
+        if params_sim.nn_pass_distance {
             *input_values_iter.next().unwrap() = self.reward_path_processor.distance_percent();
         }
 
-        if Self::PASS_DIRS {
+        if params_sim.nn_pass_dirs {
             for dir in &self.dirs {
                 let dir_pos = self.car.from_local_coordinates(*dir);
                 let origin = self.car.get_center();
@@ -694,26 +739,28 @@ impl CarSimulation {
                 if let Some(t) = intersection {
                     observe_distance(origin, dir_pos, t);
                 }
-                *input_values_iter.next().unwrap() =
-                    // intersection.map(|x| x.max(1000.)).unwrap_or(1000.);
-                    intersection.map(|x| 20. / (x + 1.).sqrt()).unwrap_or(0.);
+                *input_values_iter.next().unwrap() = if params_sim.nn_inv_distance {
+                    intersection.map(|x| 20. / (x + 1.).sqrt()).unwrap_or(0.)
+                } else {
+                    intersection.map(|x| x.max(1000.)).unwrap_or(1000.)
+                };
             }
         }
 
-        if Self::PASS_INTERNALS {
+        if params_sim.nn_pass_internals {
             for y in &self.car.get_internal_values().to_f32() {
                 *input_values_iter.next().unwrap() = *y;
             }
         }
 
         #[allow(clippy::absurd_extreme_comparisons)]
-        if Self::PASS_NEXT_SIZE > 0 {
+        if params_sim.nn_pass_next_size > 0 {
             for y in &self.next_values {
                 *input_values_iter.next().unwrap() = *y;
             }
         }
 
-        if Self::PASS_PREV_OUTPUT {
+        if params_sim.nn_pass_prev_output {
             for y in &self.prev_output {
                 *input_values_iter.next().unwrap() = *y;
             }
@@ -723,7 +770,7 @@ impl CarSimulation {
 
         let values = self.nn.calc(&self.input_values);
 
-        if Self::PASS_PREV_OUTPUT {
+        if params_sim.nn_pass_prev_output {
             values[..Self::CAR_OUTPUT_SIZE]
                 .iter()
                 .zip(self.prev_output.iter_mut())
@@ -731,7 +778,7 @@ impl CarSimulation {
         }
 
         #[allow(clippy::absurd_extreme_comparisons)]
-        if Self::PASS_NEXT_SIZE > 0 {
+        if params_sim.nn_pass_next_size > 0 {
             values[Self::CAR_OUTPUT_SIZE - 1..]
                 .iter()
                 .zip(self.next_values.iter_mut())
@@ -740,19 +787,19 @@ impl CarSimulation {
 
         let input = CarInput::from_f32(&values[0..Self::CAR_OUTPUT_SIZE]);
         if !process_user_input(&mut self.car) {
-            self.car.process_input(&input, params);
+            self.car.process_input(&input, params_phys);
         }
 
-        for i in 0..params.steps_per_time {
-            let time = params.time / params.steps_per_time as f32;
+        for i in 0..params_phys.steps_per_time {
+            let time = params_phys.time / params_phys.steps_per_time as f32;
 
-            self.car.apply_wheels_force(drift_observer, params);
+            self.car.apply_wheels_force(drift_observer, params_phys);
 
             for wall in &self.walls {
-                if self.car.process_collision(wall, params) {
+                if self.car.process_collision(wall, params_phys) {
                     self.penalty += time;
                 }
-                if self.penalty > 20. {
+                if self.penalty > params_sim.simulation_stop_penalty.value {
                     return true;
                 }
             }
@@ -761,15 +808,20 @@ impl CarSimulation {
                 observe_car_forces(&self.car);
             }
 
-            self.car.step(time, params);
+            self.car.step(time, params_phys);
             self.time_passed += time;
         }
 
         let reward = self
             .reward_path_processor
-            .process_point(self.car.get_center());
+            .process_point(self.car.get_center(), params_sim);
 
-        self.reward += reward * 10. / self.time_passed;
+        self.reward += if params_sim.simulation_scale_reward_to_time {
+             reward * 10. / self.time_passed
+        } else {
+            reward
+        };
+        
         false
     }
 
@@ -823,13 +875,11 @@ fn print_evals(evals: &[TrackEvaluation]) {
     }
 }
 
-fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
-    let enable_steps = true;
-    let enable_min_dist = true;
+fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f32 {
     evals
         .iter()
         .map(|x| {
-            if x.all_acquired && enable_steps {
+            if x.all_acquired && params.eval_skip_passed_tracks {
                 TrackEvaluation {
                     name: Default::default(),
                     penalty: 0.,
@@ -839,14 +889,14 @@ fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
                     rewards_acquired_percent: 1.,
                     all_acquired: true,
                 }
-                .to_f32()
+                .to_f32(params)
             } else {
-                x.to_f32()
+                x.to_f32(params)
             }
         })
         .sum::<f32>()
         / evals.len() as f32
-        + if enable_min_dist {
+        + if params.eval_add_min_distance {
             evals
                 .iter()
                 .map(|x| x.distance_percent)
@@ -859,41 +909,51 @@ fn sum_evals(evals: &[TrackEvaluation]) -> f32 {
 }
 
 impl TrackEvaluation {
-    fn to_f32(&self) -> f32 {
+    fn to_f32(&self, params: &SimulationParameters) -> f32 {
         0.
-            + self.reward * 10.
-            + self.early_finish_percent * 1000.
-            + self.distance_percent * 1000.
-            + self.rewards_acquired_percent * 1000.
-            - self.penalty * 20.
+            + self.reward * params.eval_reward.value
+            + self.early_finish_percent * params.eval_early_finish.value
+            + self.distance_percent * params.eval_distance.value
+            + self.rewards_acquired_percent * params.eval_acquired.value
+            - self.penalty * params.eval_penalty.value
     }
 }
 
-fn eval_nn(nn: NeuralNetwork, params: &PhysicsParameters) -> Vec<TrackEvaluation> {
-    let mut rng = StdRng::seed_from_u64(42);
+fn eval_nn(nn: NeuralNetwork, params_phys: &PhysicsParameters, params_sim: &SimulationParameters) -> Vec<TrackEvaluation> {
     let mut result: Vec<TrackEvaluation> = Default::default();
+    let tracks: Vec<Track> = get_all_tracks().into_iter().filter(|x| params_sim.tracks_enabled.contains(&x.name)).flat_map(|x| if params_sim.tracks_enable_mirror {
+        vec![x.clone(), mirror_horizontally(x)]
+    } else {
+        vec![x]
+    }).collect();
     for Track {
         name,
         walls,
         rewards,
-    } in get_all_tracks()
+    } in tracks
     {
-        for i in 0..4 {
+        let max = if params_sim.mutate_car_enable {
+            params_sim.mutate_car_count
+        } else {
+            1
+        };
+        for i in 0..max {
             let car = {
-                let mut result: Car = Default::default();
-                if i != 0 {
-                    mutate_car(result)
+                let result: Car = Default::default();
+                if i != 0 && params_sim.mutate_car_enable {
+                    mutate_car(result, params_sim)
                 } else {
                     result    
                 }
             };
-            let mut simulation = CarSimulation::new(car, nn.clone(), walls.clone(), rewards.clone());
+            let mut simulation = CarSimulation::new(car, nn.clone(), walls.clone(), rewards.clone(), params_sim);
 
             let mut early_finish_percent = 0.;
-            let steps_quota = 2000;
+            let steps_quota = params_sim.simulation_steps_quota;
             for i in 0..steps_quota {
                 if simulation.step(
-                    params,
+                    params_phys,
+                    params_sim,
                     &mut |_, _, _| (),
                     &mut |_| false,
                     &mut |_, _, _| (),
@@ -902,19 +962,19 @@ fn eval_nn(nn: NeuralNetwork, params: &PhysicsParameters) -> Vec<TrackEvaluation
                     break;
                 }
 
-                if simulation.reward_path_processor.all_acquired() {
+                if simulation.reward_path_processor.all_acquired(params_sim) {
                     early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
                     break;
                 }
             }
             result.push(TrackEvaluation {
-                name: name.clone() + &if i != 0 { i.to_string() } else { Default::default() },
+                name: name.clone() + &if i != 0 { format!(":{i}") } else { Default::default() },
                 penalty: simulation.penalty,
                 reward: simulation.reward,
                 early_finish_percent,
                 distance_percent: simulation.reward_path_processor.distance_percent(),
-                rewards_acquired_percent: simulation.reward_path_processor.rewards_acquired_percent(),
-                all_acquired: simulation.reward_path_processor.all_acquired(),
+                rewards_acquired_percent: simulation.reward_path_processor.rewards_acquired_percent(params_sim),
+                all_acquired: simulation.reward_path_processor.all_acquired(params_sim),
             });
         }
     }
@@ -948,44 +1008,17 @@ fn from_dvector_to_nn(sizes: Vec<usize>, pos: &DVector<f64>) -> NeuralNetwork {
     nn
 }
 
-#[derive(Clone)]
-struct NnToEvolve {
-    nn: NeuralNetwork,
-}
-
-impl Unit for NnToEvolve {
-    fn fitness(&self) -> f64 {
-        let evals = eval_nn(self.nn.clone(), &PhysicsParameters::default());
-        let result = sum_evals(&evals);
-        result as f64
-    }
-
-    fn breed_with(&self, other: &Self) -> Self {
-        let mut rng = thread_rng();
-        let mut result = self.clone();
-        result
-            .nn
-            .get_values_mut()
-            .iter_mut()
-            .zip(other.nn.get_values().iter())
-            .for_each(|(a, b)| {
-                if rng.gen() {
-                    *a = *b;
-                }
-            });
-        for _ in 0..10 {
-            result.nn.mutate_float_value(&mut rng);
-        }
-        result
-    }
-}
-
-pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
-    let params = PhysicsParameters::default();
+pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
+    let nn_sizes = params_sim.get_nn_sizes();
+    let params_phys = PhysicsParameters::default();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
-    // let input_done: Vec<(f32, f32)> = include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect();
-    let input_done: Vec<(f32, f32)> = vec![(-10., 10.); nn_len];
+
+    let input_done: Vec<(f32, f32)> = if RUN_FROM_PREV_NN {
+        include!("nn.data").1.into_iter().map(|x| (x - 0.01, x + 0.01)).collect()
+    } else {
+        vec![(-10., 10.); nn_len]
+    };
 
     assert_eq!(input_done.len(), nn_len);
 
@@ -993,9 +1026,10 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(
             from_slice_to_nn(nn_sizes.clone(), pos),
-            &PhysicsParameters::default(),
+            &params_phys,
+            params_sim,
         );
-        -sum_evals(&evals)
+        -sum_evals(&evals, params_sim)
     });
     for pos in 0..100_000 {
         let value = de.iter().next().unwrap();
@@ -1005,7 +1039,7 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
         if pos % 300 == 0 && pos != 0 {
             let (cost, vec) = de.best().unwrap();
             println!("cost: {}", cost);
-            print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), vec), &params));
+            print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), vec), &params_phys, params_sim));
         }
         if pos % 1000 == 0 && pos != 0 {
             let (_, vec) = de.best().unwrap();
@@ -1015,27 +1049,32 @@ pub fn evolve_by_differential_evolution(nn_sizes: Vec<usize>) {
     // show the result
     let (cost, pos) = de.best().unwrap();
     println!("cost: {}", cost);
-    print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), pos), &params));
+    print_evals(&eval_nn(from_slice_to_nn(nn_sizes.clone(), pos), &params_phys, params_sim));
     println!("(vec!{:?}, vec!{:?})", nn_sizes, pos);
 }
 
-pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
+pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
+    let nn_sizes = params_sim.get_nn_sizes();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
-    let params = PhysicsParameters::default();
+    let params_phys = PhysicsParameters::default();
 
-    let input_done: Vec<f64> = include!("nn.data").1;
-    // let input_done: Vec<f64> = vec![1.0; nn_len];
+    let input_done: Vec<f64> = if RUN_FROM_PREV_NN {
+        include!("nn.data").1
+    } else {
+        vec![1.0; nn_len]
+    };
 
     assert_eq!(input_done.len(), nn_len);
     
     let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
-        .population_size(500)
+        .population_size(20)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(
                 from_dvector_to_nn(nn_sizes.clone(), x),
-                &PhysicsParameters::default(),
+                &params_phys,
+                params_sim,
             );
-            -sum_evals(&evals) as f64
+            -sum_evals(&evals, params_sim) as f64
         })
         .unwrap();
     let now = Instant::now();
@@ -1043,11 +1082,11 @@ pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
         let _ = state.next();
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
         if pos == 0 {
-            print_evals(&eval_nn(from_dvector_to_nn(nn_sizes.clone(), point), &params));
+            print_evals(&eval_nn(from_dvector_to_nn(nn_sizes.clone(), point), &params_phys, params_sim));
         }
         println!("{pos}. {value}, {:?}", now.elapsed() / (pos + 1) as u32);
         if pos % 10 == 0 && pos != 0 {
-            print_evals(&eval_nn(from_dvector_to_nn(nn_sizes.clone(), point), &params));
+            print_evals(&eval_nn(from_dvector_to_nn(nn_sizes.clone(), point), &params_phys, params_sim));
         }
         if pos % 10 == 0 && pos != 0 {
             println!("(vec!{:?}, vec!{:?})", nn_sizes, from_dvector_to_nn(nn_sizes.clone(), point).get_values());
@@ -1059,7 +1098,8 @@ pub fn evolve_by_cma_es(nn_sizes: Vec<usize>) {
     println!("(vec!{:?}, vec!{:?})", nn_sizes, solution.as_slice());
     let evals = eval_nn(
         from_dvector_to_nn(nn_sizes.clone(), solution),
-        &PhysicsParameters::default(),
+        &params_phys,
+        params_sim,
     );
     print_evals(&evals);
 }
@@ -1094,7 +1134,7 @@ fn forward_diff_vec(
 }
 
 #[allow(unused_imports, unused_variables)]
-fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
+fn evolve_by_bfgs(params_sim: &SimulationParameters) {
     use argmin::solver::conjugategradient::beta::*;
     use argmin::solver::conjugategradient::*;
     use argmin::solver::neldermead::*;
@@ -1113,7 +1153,8 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
 
     #[derive(Clone)]
     struct NnStruct {
-        nn_sizes: Vec<usize>,
+        params_sim: SimulationParameters,
+        params_phys: PhysicsParameters,
 
         rng: Arc<Mutex<Xoshiro256PlusPlus>>,
     }
@@ -1153,10 +1194,11 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             let evals = eval_nn(
-                from_slice_to_nn_f64(self.nn_sizes.clone(), &p.to_vec()),
-                &PhysicsParameters::default(),
+                from_slice_to_nn_f64(self.params_sim.get_nn_sizes(), &p.to_vec()),
+                &self.params_phys,
+                &self.params_sim
             );
-            Ok(-sum_evals(&evals) as f64)
+            Ok(-sum_evals(&evals, &self.params_sim) as f64)
         }
     }
     impl Gradient for NnStruct {
@@ -1166,10 +1208,11 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
         fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
             Ok(forward_diff_ndarray_f64(p, &|x| {
                 let evals = eval_nn(
-                    from_slice_to_nn_f64(self.nn_sizes.clone(), &x.to_vec()),
-                    &PhysicsParameters::default(),
+                    from_slice_to_nn_f64(self.params_sim.get_nn_sizes(), &x.to_vec()),
+                &self.params_phys,
+                &self.params_sim
                 );
-                -sum_evals(&evals) as f64
+                -sum_evals(&evals, &self.params_sim) as f64
             }))
         }
     }
@@ -1200,23 +1243,29 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
         }
     }
 
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let params_phys = PhysicsParameters::default();
+
+    let nn_len = NeuralNetwork::new(params_sim.get_nn_sizes()).get_values().len();
     let cost = NnStruct {
-        nn_sizes: nn_sizes.clone(),
+        params_sim: params_sim.clone(),
+        params_phys: params_phys.clone(),
         rng: Arc::new(Mutex::new(Xoshiro256PlusPlus::from_entropy())),
     };
-    let rng = thread_rng();
-    // let init_param: Array1<f64> = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect();
-    let init_param: Array1<f64> = include!("nn.data").1.into_iter().collect();
+    let mut rng = thread_rng();
 
+    let init_param: Array1<f64> = if RUN_FROM_PREV_NN {
+        include!("nn.data").1.into_iter().collect()
+    } else {
+        (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect()
+    };
     assert_eq!(nn_len, init_param.len());
 
     let min_param: Array1<f64> = (0..nn_len).map(|_| -10.).collect();
     let max_param: Array1<f64> = (0..nn_len).map(|_| 10.).collect();
-    // let init_hessian: Array2<f64> = Array2::eye(nn_len);
+    let init_hessian: Array2<f64> = Array2::eye(nn_len);
     let linesearch = MoreThuenteLineSearch::new().with_c(1e-4, 0.9).unwrap();
-    // let solver = BFGS::new(linesearch);
-    let solver = SteepestDescent::new(linesearch);
+    let solver = BFGS::new(linesearch);
+    // let solver = SteepestDescent::new(linesearch);
     // let solver = ParticleSwarm::new((min_param, max_param), 100);
     // let solver = NelderMead::new((0..nn_len+1).map(|_| (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Array1<f64>>()).collect());
     // let solver = NonlinearConjugateGradient::new(linesearch, FletcherReeves::new());
@@ -1231,7 +1280,7 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
         .configure(|state| {
             state
                 .param(init_param)
-                // .inv_hessian(init_hessian)
+                .inv_hessian(init_hessian)
                 .max_iters(15)
                 .target_cost(-10000000.)
         })
@@ -1246,51 +1295,92 @@ fn evolve_by_bfgs(nn_sizes: Vec<usize>) {
     // let input_vec = &res.state.best_individual.clone().unwrap().position;
     // let input_vec = nn_sizes.clone(), &res.state.best_param.clone().unwrap().to_vec();
 
-    let time = Instant::now();
-    dbg!(cost.gradient(input_vec));
-    dbg!(time.elapsed());
-
     let evals = eval_nn(
-        from_slice_to_nn_f64(nn_sizes.clone(), &input_vec.to_vec()),
-        &PhysicsParameters::default(),
+        from_slice_to_nn_f64(params_sim.get_nn_sizes(), &input_vec.to_vec()),
+        &params_phys,
+        params_sim
     );
     print_evals(&evals);
 
     println!("{res}");
 }
 
+fn calc_gradient(params_sim: &SimulationParameters) {
+    let nn_len = NeuralNetwork::new(params_sim.get_nn_sizes()).get_values().len();
+    let input_done: Vec<f32> = include!("nn.data").1;
+    assert_eq!(input_done.len(), nn_len);
+    let time = Instant::now();
+    let mut count = 0;
+    dbg!(forward_diff_vec(&input_done, &mut |x| {
+        count += 1;
+        let evals = eval_nn(
+            from_slice_to_nn(params_sim.get_nn_sizes(), x),
+            &PhysicsParameters::default(),
+            params_sim
+        );
+        -sum_evals(&evals, params_sim)
+    }));
+    dbg!(count);
+    dbg!(time.elapsed());
+}
+
+fn mutate_nn() {
+    let nn = from_slice_to_nn(include!("nn.data").0, &include!("nn.data").1);
+    let mut nn_uno = nn.to_unoptimized();
+    nn_uno.add_hidden_layer(1);
+    let nn = nn_uno.to_optimized();
+    println!("(vec!{:?}, vec!{:?})", nn.get_sizes(), nn.get_values());
+}
+
+impl Default for SimulationParameters {
+    fn default() -> Self {
+        Self {
+            tracks_enabled: get_all_tracks().into_iter().map(|x| x.name).collect(),
+            tracks_enable_mirror: true,
+
+            mutate_car_enable: false,
+            mutate_car_count: 3,
+            mutate_car_angle_range: Clamped::new(0.7, 0., TAU/8.),
+
+            rewards_enable_early_acquire: true,
+            rewards_add_each_acquire: false,
+            rewards_enable_distance_integral: false,
+            rewards_progress_distance: Clamped::new(200., 0., 1000.),
+
+            simulation_stop_penalty: Clamped::new(20., 0., 50.),
+            simulation_scale_reward_to_time: false,
+            simulation_steps_quota: 2000,
+            
+            eval_skip_passed_tracks: false,
+            eval_add_min_distance: false,
+            eval_reward: Clamped::new(10., 0., 5000.),
+            eval_early_finish: Clamped::new(1000., 0., 5000.),
+            eval_distance: Clamped::new(1000., 0., 5000.),
+            eval_acquired: Clamped::new(1000., 0., 5000.),
+            eval_penalty: Clamped::new(10., 0., 5000.),
+
+            nn_pass_time: false,
+            nn_pass_distance: false,
+            nn_pass_dirs: true,
+            nn_pass_internals: true,
+            nn_pass_prev_output: false,
+            nn_dirs_size: 10,
+            nn_pass_next_size: 0,
+            nn_hidden_layers: vec![4, 4],
+            nn_inv_distance: true,
+        }
+    }
+}
+
+pub const RUN_EVOLUTION: bool = true;
+pub const RUN_FROM_PREV_NN: bool = false;
+
 pub fn evolution() {
-    let nn_sizes = vec![
-        CarSimulation::get_total_input_neurons(),
-        4,
-        4,
-        CarSimulation::CAR_OUTPUT_SIZE,
-    ];
+    let params = SimulationParameters::default();
 
-    // let nn = from_slice_to_nn(include!("nn.data").0, &include!("nn.data").1);
-    // let mut nn_uno = nn.to_unoptimized();
-    // nn_uno.add_hidden_layer(1);
-    // let nn = nn_uno.to_optimized();
-    // println!("(vec!{:?}, vec!{:?})", nn.get_sizes(), nn.get_values());
-
-    // evolve_by_differential_evolution(nn_sizes);
-    // evolve_by_genetic_algorithm(nn_sizes);
-    // evolve_by_cma_es(nn_sizes);
-    evolve_by_bfgs(nn_sizes);
-
-    // let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
-    // let input_done: Vec<f32> = include!("nn.data").1;
-    // assert_eq!(input_done.len(), nn_len);
-    // let time = Instant::now();
-    // let mut count = 0;
-    // dbg!(forward_diff_vec(&input_done, &mut |x| {
-    //     count += 1;
-    //     let evals = eval_nn(
-    //         from_slice_to_nn(nn_sizes.clone(), x),
-    //         &PhysicsParameters::default(),
-    //     );
-    //     -sum_evals(&evals)
-    // }));
-    // dbg!(count);
-    // dbg!(time.elapsed());
+    // mutate_nn();
+    // evolve_by_differential_evolution(&params);
+    evolve_by_cma_es(&params);
+    // evolve_by_bfgs(&params);
+    // calc_gradient(&params);
 }

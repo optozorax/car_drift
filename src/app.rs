@@ -1,5 +1,3 @@
-use rand::Rng;
-use rand::thread_rng;
 use crate::common::*;
 use crate::evolution::*;
 use crate::nn::*;
@@ -58,7 +56,7 @@ impl Graphs {
         name: impl Into<String>,
         value: f32,
         color: egui::Color32,
-        params: &Parameters,
+        params: &InterfaceParameters,
     ) {
         let entry = &mut self.points.entry(group.into()).or_default();
         let entry = &mut entry.entry(name.into()).or_default();
@@ -141,7 +139,9 @@ pub struct TemplateApp {
     graphs: Graphs,
     drifts: Vec<Drifts>,
 
-    params: Parameters,
+    params_intr: InterfaceParameters,
+    params_phys: PhysicsParameters,
+    params_sim: SimulationParameters,
 
     // walls: Storage2<Wall>,
     // rewards: Storage2<Reward>,
@@ -163,6 +163,7 @@ pub struct TemplateApp {
 
 impl Default for TemplateApp {
     fn default() -> Self {
+        let params_sim = SimulationParameters::default();
         Self {
             rng: StdRng::seed_from_u64(42),
 
@@ -171,7 +172,9 @@ impl Default for TemplateApp {
             graphs: Default::default(),
             drifts: vec![Default::default(); 2],
 
-            params: Default::default(),
+            params_intr: Default::default(),
+            params_phys: Default::default(),
+            params_sim: Default::default(),
 
             points: Storage2::new("Edits".to_string()),
             current_edit: 0,
@@ -183,7 +186,7 @@ impl Default for TemplateApp {
             quota: 0,
 
             simulation: CarSimulation::new(
-                mutate_car(Default::default()),
+                mutate_car(Default::default(), &params_sim),
                 {
                     #[allow(clippy::excessive_precision)]
                     let (sizes, values) = include!("nn.data");
@@ -209,6 +212,7 @@ impl Default for TemplateApp {
                 // mirror_horizontally(track_turn_right_smooth()).rewards,
                 // mirror_horizontally(track_straight_45()).walls,
                 // mirror_horizontally(track_straight_45()).rewards,
+                &params_sim
             ),
         }
     }
@@ -229,7 +233,7 @@ impl TemplateApp {
 impl TemplateApp {
     fn reset_car(&mut self) {
         self.simulation.reset();
-        self.simulation.car = mutate_car(Default::default());
+        self.simulation.car = mutate_car(Default::default(), &self.params_sim);
         self.trajectories.clear();
         self.graphs.clear();
         self.points_count = 0;
@@ -277,7 +281,7 @@ impl eframe::App for TemplateApp {
                     // self.params.ui(ui);
                     Frame::canvas(ui.style()).show(ui, |ui| {
                         let (mut response, painter) = ui.allocate_painter(
-                            Vec2::new(self.params.canvas_size, self.params.canvas_size),
+                            Vec2::new(self.params_intr.canvas_size, self.params_intr.canvas_size),
                             Sense::click_and_drag(),
                         );
 
@@ -285,16 +289,16 @@ impl eframe::App for TemplateApp {
                             response.rect,
                             Rect::from_center_size(
                                 self.simulation.car.get_center() + self.offset.to_vec2(),
-                                Vec2::new(self.params.view_size, self.params.view_size),
+                                Vec2::new(self.params_intr.view_size, self.params_intr.view_size),
                             ),
                         );
                         let to_screen = from_screen.inverse();
 
                         let scroll_amount = 0.05;
                         if wheel.y > 0. {
-                            self.params.view_size /= 1. + scroll_amount;
+                            self.params_intr.view_size /= 1. + scroll_amount;
                         } else if wheel.y < 0. {
-                            self.params.view_size *= 1. + scroll_amount;
+                            self.params_intr.view_size *= 1. + scroll_amount;
                         }
 
                         if response.dragged_by(PointerButton::Middle) {
@@ -443,7 +447,8 @@ impl eframe::App for TemplateApp {
                         self.quota += 1;
 
                         self.simulation.step(
-                            &self.params.physics,
+                            &self.params_phys,
+                            &self.params_sim,
                             &mut |origin, dir_pos, t| {
                                 painter.add(Shape::line(
                                     vec![
@@ -480,22 +485,22 @@ impl eframe::App for TemplateApp {
                                             0.0
                                         },
                                     },
-                                    &self.params.physics,
+                                    &self.params_phys,
                                 );
                                 true
                             },
                             &mut |i, pos, value| {
                                 self.drifts[i].process_point(
                                     pos.to_pos2(),
-                                    value > self.params.drift_starts_at,
+                                    value > self.params_intr.drift_starts_at,
                                 );
                             },
                             &mut |car| {
-                                car.draw_forces(&painter, &self.params, &to_screen);
+                                car.draw_forces(&painter, &self.params_intr, &self.params_phys, &to_screen);
 
                                 self.trajectories.push_back(car.get_center());
                                 self.points_count += 1;
-                                if self.points_count > self.params.graph_points_size_limit {
+                                if self.points_count > self.params_intr.graph_points_size_limit {
                                     self.trajectories.pop_front();
                                     self.points_count -= 1;
                                 }
@@ -507,7 +512,7 @@ impl eframe::App for TemplateApp {
                                     "acceleration",
                                     values.local_acceleration.length(),
                                     Color32::GRAY,
-                                    &self.params,
+                                    &self.params_intr,
                                 );
 
                                 self.graphs.add_point(
@@ -515,7 +520,7 @@ impl eframe::App for TemplateApp {
                                     "torque",
                                     values.angle_acceleration,
                                     Color32::BROWN,
-                                    &self.params,
+                                    &self.params_intr,
                                 );
 
                                 self.graphs.add_point(
@@ -523,7 +528,7 @@ impl eframe::App for TemplateApp {
                                     "speed",
                                     values.local_speed.length(),
                                     Color32::BLACK,
-                                    &self.params,
+                                    &self.params_intr,
                                 );
                             },
                         );
@@ -531,7 +536,7 @@ impl eframe::App for TemplateApp {
                 });
 
                 ui.label(format!("Distance: {:.2}%", self.simulation.reward_path_processor.distance_percent() * 100.));
-                ui.label(format!("Rewards percent: {:.2}%", self.simulation.reward_path_processor.rewards_acquired_percent() * 100.));
+                ui.label(format!("Rewards percent: {:.2}%", self.simulation.reward_path_processor.rewards_acquired_percent(&self.params_sim) * 100.));
                 ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
                 ui.label(format!("Quota: {}", self.quota));
                 // ui.label(format!(

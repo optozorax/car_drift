@@ -31,7 +31,7 @@ pub struct PhysicsParameters {
     pub time: f32,
 }
 
-const SIMPLE_PHYSICS: bool = true;
+const SIMPLE_PHYSICS: bool = false;
 
 impl Default for PhysicsParameters {
     fn default() -> Self {
@@ -40,9 +40,9 @@ impl Default for PhysicsParameters {
             gravity: 9.8,
             friction_coefficient: 0.5, // https://www.engineeringtoolbox.com/friction-coefficients-d_778.html
             full_force_on_speed: 30.,
-            acceleration_ratio: 0.2,               // 0.6 is good for me
+            acceleration_ratio: 0.2,               // 0.6 is good for me, 0.2 is good for normal physics
             rolling_resistance_coefficient: 0.006, // car tire, https://en.wikipedia.org/wiki/Rolling_resistance
-            wheel_turn_per_time: 0.03,             // 0.07 is good for me
+            wheel_turn_per_time: 0.1,             // 0.07 is good for me
             angle_limit: std::f32::consts::PI * 0.2,
             wall_force: 1000.,
             max_speed: 100.,
@@ -270,9 +270,11 @@ impl Car {
         }
     }
 
-    pub fn change_position(&mut self, dangle: f32, dpos: Vec2) {
+    pub fn change_position(&mut self, dangle: f32, dpos: Vec2, dangle_speed: f32, dspeed: Vec2) {
         self.angle += dangle;
         self.center += dpos;
+        self.speed += dspeed;
+        self.angle_speed += dangle_speed;
         self.update_cache();
     }
 
@@ -568,7 +570,7 @@ impl Car {
     pub fn process_input(&mut self, input: &CarInput, params: &PhysicsParameters) {
         if SIMPLE_PHYSICS {
             self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
-                * 10.
+                * 10.0
                 * input.acceleration;
             self.angle += 0.02 * input.turn;
         } else {

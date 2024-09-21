@@ -23,7 +23,7 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 fn relu1(x: f32) -> f32 {
-    x.max(0.)
+    x.max(0.).min(10.)
 }
 
 fn relu2(x: f32) -> f32 {
@@ -31,7 +31,7 @@ fn relu2(x: f32) -> f32 {
         x
     } else {
         x * 0.1
-    }
+    }.max(-10.).min(10.)
 }
 
 fn activation(x: f32) -> f32 {
@@ -72,6 +72,10 @@ impl NeuralNetwork {
         };
         result.resize_reserved();
         result
+    }
+
+    pub fn get_sizes(&self) -> &[usize] {
+        &self.sizes
     }
 
     pub fn get_values(&self) -> &[f32] {
@@ -239,11 +243,20 @@ impl NeuralNetworkUnoptimized {
         layer.matrix[row][col] += rng.gen_range(-0.1..0.1);
     }
 
-    pub fn add_hidden_neuron(&mut self, rng: &mut impl Rng) {
+    pub fn add_random_hidden_neuron(&mut self, rng: &mut impl Rng) {
         if self.layers.len() <= 1 {
             return;
         }
         let layer_index = rng.gen_range(0..self.layers.len() - 1);
+        self.add_hidden_neuron(layer_index);
+    }
+
+    // layer_index = 0 - first layer
+    // layer_index = layers.size() - 1 - last layer
+    pub fn add_hidden_neuron(&mut self, layer_index: usize) {
+        if self.layers.len() <= 1 {
+            return;
+        }
         let layer = &mut self.layers[layer_index];
         layer.output_size += 1;
         layer.matrix.push(vec![0.0; layer.input_size]);
@@ -258,8 +271,15 @@ impl NeuralNetworkUnoptimized {
         }
     }
 
-    pub fn add_hidden_layer(&mut self, rng: &mut impl Rng) {
+    
+    pub fn add_random_hidden_layer(&mut self, rng: &mut impl Rng) {
         let layer_index = rng.gen_range(0..=self.layers.len());
+        self.add_hidden_layer(layer_index);
+    }
+
+    // layer_index = 0 - layer right after input
+    // layer_index = layers.len() - layer right before output
+    pub fn add_hidden_layer(&mut self, layer_index: usize) {
         let input_size = if layer_index == 0 {
             self.layers[0].input_size
         } else {
@@ -383,7 +403,7 @@ mod tests2 {
                 let mut nn = NeuralNetworkUnoptimized::generate_random(&mut rng, &neuron_counts);
                 let input = generate_random_input(&mut rng, neuron_counts[0]);
                 let output_before = nn.calc(&input);
-                nn.add_hidden_neuron(&mut rng);
+                nn.add_random_hidden_neuron(&mut rng);
                 let output_after = nn.calc(&input);
                 assert_relative_eq!(
                     output_before.as_slice(),
@@ -405,7 +425,7 @@ mod tests2 {
                 let mut input = generate_random_input(&mut rng, neuron_counts[0]);
                 activation_vector(&mut input);
                 let output_before = nn.calc(&input);
-                nn.add_hidden_layer(&mut rng);
+                nn.add_random_hidden_layer(&mut rng);
                 let output_after = nn.calc(&input);
                 assert_relative_eq!(
                     output_before.as_slice(),

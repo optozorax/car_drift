@@ -1,3 +1,5 @@
+use rand::Rng;
+use rand::thread_rng;
 use crate::common::*;
 use crate::evolution::*;
 use crate::nn::*;
@@ -155,6 +157,8 @@ pub struct TemplateApp {
     simulation: CarSimulation,
 
     override_nn: bool,
+
+    quota: usize,
 }
 
 impl Default for TemplateApp {
@@ -176,8 +180,10 @@ impl Default for TemplateApp {
 
             override_nn: true,
 
+            quota: 0,
+
             simulation: CarSimulation::new(
-                Default::default(),
+                mutate_car(Default::default()),
                 {
                     #[allow(clippy::excessive_precision)]
                     let (sizes, values) = include!("nn.data");
@@ -189,12 +195,20 @@ impl Default for TemplateApp {
                         .for_each(|(x, y)| *x = *y);
                     result
                 },
+                // track_straight_line().walls,
+                // track_straight_line().rewards,
                 track_complex().walls,
                 track_complex().rewards,
-                // mirror_horizontally(track_complex()).0,
-                // mirror_horizontally(track_complex()).1,
-                // mirror_horizontally(track_turn_right_smooth()).0,
-                // mirror_horizontally(track_turn_right_smooth()).1,
+                // track_smooth_left_and_right().walls,
+                // track_smooth_left_and_right().rewards,
+                // track_turn_left_180().walls,
+                // track_turn_left_180().rewards,
+                // mirror_horizontally(track_complex()).walls,
+                // mirror_horizontally(track_complex()).rewards,
+                // mirror_horizontally(track_turn_right_smooth()).walls,
+                // mirror_horizontally(track_turn_right_smooth()).rewards,
+                // mirror_horizontally(track_straight_45()).walls,
+                // mirror_horizontally(track_straight_45()).rewards,
             ),
         }
     }
@@ -215,12 +229,14 @@ impl TemplateApp {
 impl TemplateApp {
     fn reset_car(&mut self) {
         self.simulation.reset();
+        self.simulation.car = mutate_car(Default::default());
         self.trajectories.clear();
         self.graphs.clear();
         self.points_count = 0;
         self.drifts.iter_mut().for_each(|x| x.drifts.clear());
         self.offset = pos2(0., 0.);
         self.drag_pos = None;
+        self.quota = 0;
     }
 }
 
@@ -424,6 +440,8 @@ impl eframe::App for TemplateApp {
 
                         self.simulation.draw(&painter, &to_screen);
 
+                        self.quota += 1;
+
                         self.simulation.step(
                             &self.params.physics,
                             &mut |origin, dir_pos, t| {
@@ -442,24 +460,28 @@ impl eframe::App for TemplateApp {
                                 if !self.override_nn {
                                     return false;
                                 }
-                                car.process_input(&CarInput {
-                                    brake: keys_down.contains(&egui::Key::Space),
-                                    acceleration: if keys_down.contains(&egui::Key::ArrowUp) {
-                                        1.0
-                                    } else if keys_down.contains(&egui::Key::ArrowDown) {
-                                        -1.0
-                                    } else {
-                                        0.0
+                                car.process_input(
+                                    &CarInput {
+                                        brake: keys_down.contains(&egui::Key::Space),
+                                        acceleration: if keys_down.contains(&egui::Key::ArrowUp) {
+                                            1.0
+                                        } else if keys_down.contains(&egui::Key::ArrowDown) {
+                                            -1.0
+                                        } else {
+                                            0.0
+                                        },
+                                        remove_turn: !(keys_down.contains(&egui::Key::ArrowLeft)
+                                            || keys_down.contains(&egui::Key::ArrowRight)),
+                                        turn: if keys_down.contains(&egui::Key::ArrowLeft) {
+                                            1.0
+                                        } else if keys_down.contains(&egui::Key::ArrowRight) {
+                                            -1.0
+                                        } else {
+                                            0.0
+                                        },
                                     },
-                                    remove_turn: !(keys_down.contains(&egui::Key::ArrowLeft) && keys_down.contains(&egui::Key::ArrowRight)),
-                                    turn: if keys_down.contains(&egui::Key::ArrowLeft) {
-                                        1.0
-                                    } else if keys_down.contains(&egui::Key::ArrowRight) {
-                                        -1.0
-                                    } else {
-                                        0.0
-                                    },
-                                }, &self.params.physics);
+                                    &self.params.physics,
+                                );
                                 true
                             },
                             &mut |i, pos, value| {
@@ -508,7 +530,10 @@ impl eframe::App for TemplateApp {
                     });
                 });
 
-                // ui.label(format!("Reward: {}", self.simulation.sum_reward));
+                ui.label(format!("Distance: {:.2}%", self.simulation.reward_path_processor.distance_percent() * 100.));
+                ui.label(format!("Rewards percent: {:.2}%", self.simulation.reward_path_processor.rewards_acquired_percent() * 100.));
+                ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
+                ui.label(format!("Quota: {}", self.quota));
                 // ui.label(format!(
                 //     "Distance reward: {}",
                 //     self.simulation.total_reward()

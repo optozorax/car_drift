@@ -29,9 +29,8 @@ pub struct PhysicsParameters {
     max_speed: f32,
     pub steps_per_time: usize,
     pub time: f32,
+    pub simple_physics_ratio: f32, // 0 - hard, 1 - simple
 }
-
-const SIMPLE_PHYSICS: bool = false;
 
 impl Default for PhysicsParameters {
     fn default() -> Self {
@@ -48,6 +47,7 @@ impl Default for PhysicsParameters {
             max_speed: 100.,
             steps_per_time: 3,
             time: 0.5,
+            simple_physics_ratio: 0.0,
         }
     }
 }
@@ -113,10 +113,14 @@ impl PhysicsParameters {
         ui.label("Time step:");
         egui_0_1(ui, &mut self.time);
         ui.end_row();
+
+        ui.label("Simple physics:");
+        egui_0_1(ui, &mut self.simple_physics_ratio);
+        ui.end_row();
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
-        egui::Grid::new("regular params")
+        egui::Grid::new("physics params")
             .num_columns(2)
             .spacing([40.0, 4.0])
             .striped(true)
@@ -294,10 +298,8 @@ impl Car {
             (1.5 * self.angle_acceleration - 0.5 * self.prev_angle_acceleration) * dt;
         self.angle += (1.5 * self.angle_speed - 0.5 * self.prev_angle_speed) * dt;
 
-        if SIMPLE_PHYSICS {
-            self.speed *= 0.99;
-            self.angle_speed *= 0.99;
-        }
+        self.speed *= 1. - 0.01 * params.simple_physics_ratio;
+        self.angle_speed *= 1. - 0.01 * params.simple_physics_ratio;
 
         // regular euler
         // self.speed += self.acceleration * dt;
@@ -344,15 +346,13 @@ impl Car {
     }
 
     // we know for certain that point is inside
-    pub fn apply_force(&mut self, pos: Pos2, dir: Vec2) {
+    pub fn apply_force(&mut self, pos: Pos2, dir: Vec2, params: &PhysicsParameters) {
         let r = pos - self.center;
         let torque = cross(r, dir);
         let dw_dt = torque / self.moment_of_inertia;
         let dx_dt = dir / self.mass;
         self.acceleration += dx_dt;
-        if !SIMPLE_PHYSICS {
-            self.angle_acceleration += dw_dt;
-        }
+        self.angle_acceleration += dw_dt * (1. - params.simple_physics_ratio);
 
         self.forces.push((pos, dir));
     }
@@ -428,10 +428,6 @@ impl Car {
         drift_observer: &mut impl FnMut(usize, Vec2, f32),
         params: &PhysicsParameters,
     ) {
-        if SIMPLE_PHYSICS {
-            return;
-        }
-
         // about traction: https://www.engineeringtoolbox.com/tractive-effort-d_1783.html
         let traction_force = params.traction_coefficient * self.mass * params.gravity;
         let traction_per_wheel = traction_force / self.wheels.len() as f32;
@@ -510,7 +506,7 @@ impl Car {
 
             total_force *= traction_per_wheel;
 
-            self.apply_force(self.wheel_pos(wheel), total_force);
+            self.apply_force(self.wheel_pos(wheel), total_force * (1. - params.simple_physics_ratio), params);
         }
 
         std::mem::swap(&mut wheels_temp, &mut self.wheels);
@@ -568,27 +564,25 @@ impl CarInput {
 
 impl Car {
     pub fn process_input(&mut self, input: &CarInput, params: &PhysicsParameters) {
-        if SIMPLE_PHYSICS {
-            self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
-                * 10.0
-                * input.acceleration;
-            self.angle += 0.02 * input.turn;
-        } else {
-            if input.brake {
-                self.brake();
-            } else if input.acceleration > 0. {
-                self.move_forward(input.acceleration.abs());
-            } else if input.acceleration < 0. {
-                self.move_backwards(input.acceleration.abs());
-            }
+        self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
+            * 10.0
+            * input.acceleration
+            * params.simple_physics_ratio;
+        self.angle -= 0.02 * input.turn * params.simple_physics_ratio;
+        if input.brake {
+            self.brake(params);
+        } else if input.acceleration > 0. {
+            self.move_forward(input.acceleration.abs() * (1. - params.simple_physics_ratio));
+        } else if input.acceleration < 0. {
+            self.move_backwards(input.acceleration.abs() * (1. - params.simple_physics_ratio));
+        }
 
-            if input.remove_turn {
-                self.remove_turns(params);
-            } else if input.turn > 0. {
-                self.turn_left(input.turn.abs(), params);
-            } else if input.turn < 0. {
-                self.turn_right(input.turn.abs(), params);
-            }
+        if input.remove_turn {
+            self.remove_turns(params);
+        } else if input.turn > 0. {
+            self.turn_left(input.turn.abs() * (1. - params.simple_physics_ratio), params);
+        } else if input.turn < 0. {
+            self.turn_right(input.turn.abs() * (1. - params.simple_physics_ratio), params);
         }
     }
 
@@ -604,9 +598,9 @@ impl Car {
         }
     }
 
-    pub fn brake(&mut self) {
+    pub fn brake(&mut self, params: &PhysicsParameters) {
         for pos in &self.up_wheels {
-            self.wheels[*pos].action = WheelAction::Braking(1.);
+            self.wheels[*pos].action = WheelAction::Braking(1. - params.simple_physics_ratio);
         }
     }
 
@@ -624,7 +618,7 @@ impl Car {
 
     pub fn remove_turns(&mut self, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
-            self.wheels[*pos].remove_turns = params.wheel_turn_per_time * 5.;
+            self.wheels[*pos].remove_turns = params.wheel_turn_per_time * 5. * (1. - params.simple_physics_ratio);
         }
     }
 
@@ -643,7 +637,7 @@ impl Car {
         for point in self.get_points() {
             if wall.is_inside(point) {
                 let outer_force = wall.outer_force(point);
-                self.apply_force(point, outer_force * params.wall_force);
+                self.apply_force(point, outer_force * params.wall_force, params);
                 if outer_force.length() > 1.7 {
                     self.speed *= 0.1;
                     self.angle_speed *= 0.1;
@@ -889,6 +883,8 @@ impl StorageElem2 for Wall {
             .striped(true)
             .show(ui, |ui| {
                 self.grid_ui(ui);
+                ui.separator();
+                ui.end_row();
             });
     }
 }

@@ -278,7 +278,10 @@ impl eframe::App for TemplateApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // self.params.ui(ui);
+                    ui.vertical(|ui| {
+                        self.params_phys.ui(ui);
+                        self.params_intr.ui(ui);
+                    });
                     Frame::canvas(ui.style()).show(ui, |ui| {
                         let (mut response, painter) = ui.allocate_painter(
                             Vec2::new(self.params_intr.canvas_size, self.params_intr.canvas_size),
@@ -539,10 +542,6 @@ impl eframe::App for TemplateApp {
                 ui.label(format!("Rewards percent: {:.2}%", self.simulation.reward_path_processor.rewards_acquired_percent(&self.params_sim) * 100.));
                 ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
                 ui.label(format!("Quota: {}", self.quota));
-                // ui.label(format!(
-                //     "Distance reward: {}",
-                //     self.simulation.total_reward()
-                // ));
                 ui.label(format!("Time: {}", self.simulation.time_passed));
                 ui.add(egui::Slider::new(
                     &mut self.current_edit,

@@ -168,7 +168,6 @@ impl InterfaceParameters {
             .striped(true)
             .show(ui, |ui| {
                 self.grid_ui(ui);
-
                 ui.separator();
                 ui.end_row();
             });

@@ -1372,7 +1372,7 @@ impl Default for SimulationParameters {
     }
 }
 
-pub const RUN_EVOLUTION: bool = true;
+pub const RUN_EVOLUTION: bool = false;
 pub const RUN_FROM_PREV_NN: bool = false;
 
 pub fn evolution() {

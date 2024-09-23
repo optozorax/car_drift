@@ -18,26 +18,26 @@ pub fn mul_matrix(
     }
 }
 
-fn sigmoid(x: f32) -> f32 {
+pub fn sigmoid(x: f32) -> f32 {
     1_f32 / (1_f32 + std::f32::consts::E.powf(-x))
 }
 
-fn relu1(x: f32) -> f32 {
+pub fn sqrt_sigmoid(x: f32) -> f32 {
+    x / (1. + x * x).sqrt()
+}
+
+pub fn relu1(x: f32) -> f32 {
     x.clamp(0., 10.)
 }
 
-fn relu2(x: f32) -> f32 {
-    if x > 0. {
-        x
-    } else {
-        x * 0.1
-    }.clamp(-10., 10.)
+pub fn relu2(x: f32) -> f32 {
+    if x > 0. { x } else { x * 0.1 }.clamp(-1., 10.)
 }
 
 fn activation(x: f32) -> f32 {
     // sigmoid(x)
-    relu1(x)
-    // relu2(x)
+    // relu1(x)
+    relu2(x)
 }
 
 fn activation_vector(output: &mut [f32]) {
@@ -271,7 +271,6 @@ impl NeuralNetworkUnoptimized {
         }
     }
 
-    
     pub fn add_random_hidden_layer(&mut self, rng: &mut impl Rng) {
         let layer_index = rng.gen_range(0..=self.layers.len());
         self.add_hidden_layer(layer_index);

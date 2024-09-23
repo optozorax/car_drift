@@ -101,6 +101,7 @@ pub struct InterfaceParameters {
     pub canvas_size: f32,
     pub view_size: f32,
     pub graph_points_size_limit: usize,
+    pub show_dirs: bool,
 }
 
 impl Default for InterfaceParameters {
@@ -109,9 +110,10 @@ impl Default for InterfaceParameters {
             drift_starts_at: 0.1,
             force_draw_multiplier: 4.4,
             plot_size: 170.,
-            canvas_size: 1000.,
+            canvas_size: 700.,
             view_size: 1500.,
             graph_points_size_limit: 1000,
+            show_dirs: false,
         }
     }
 }
@@ -158,6 +160,10 @@ impl InterfaceParameters {
 
         ui.label("Graph points size:");
         egui_usize(ui, &mut self.graph_points_size_limit);
+        ui.end_row();
+
+        ui.label("Show dirs:");
+        ui.checkbox(&mut self.show_dirs, "");
         ui.end_row();
     }
 

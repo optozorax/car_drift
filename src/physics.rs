@@ -1,6 +1,6 @@
 use crate::common::*;
 use crate::math::*;
-use crate::storage::StorageElem2;
+use crate::nn::sqrt_sigmoid;
 use egui::emath::RectTransform;
 use egui::pos2;
 use egui::vec2;
@@ -21,7 +21,7 @@ pub struct PhysicsParameters {
     gravity: f32,
     friction_coefficient: f32,
     full_force_on_speed: f32,
-    acceleration_ratio: f32,
+    pub acceleration_ratio: f32,
     rolling_resistance_coefficient: f32,
     wheel_turn_per_time: f32,
     angle_limit: f32,
@@ -39,9 +39,9 @@ impl Default for PhysicsParameters {
             gravity: 9.8,
             friction_coefficient: 0.5, // https://www.engineeringtoolbox.com/friction-coefficients-d_778.html
             full_force_on_speed: 30.,
-            acceleration_ratio: 0.2,               // 0.6 is good for me, 0.2 is good for normal physics
+            acceleration_ratio: 0.4, // 0.6 is good for me, 0.2 is good for normal physics
             rolling_resistance_coefficient: 0.006, // car tire, https://en.wikipedia.org/wiki/Rolling_resistance
-            wheel_turn_per_time: 0.1,             // 0.07 is good for me
+            wheel_turn_per_time: 0.1,              // 0.07 is good for me
             angle_limit: std::f32::consts::PI * 0.2,
             wall_force: 1000.,
             max_speed: 100.,
@@ -126,6 +126,8 @@ impl PhysicsParameters {
             .striped(true)
             .show(ui, |ui| {
                 self.grid_ui(ui);
+                ui.separator();
+                ui.end_row();
             });
     }
 }
@@ -506,7 +508,11 @@ impl Car {
 
             total_force *= traction_per_wheel;
 
-            self.apply_force(self.wheel_pos(wheel), total_force * (1. - params.simple_physics_ratio), params);
+            self.apply_force(
+                self.wheel_pos(wheel),
+                total_force * (1. - params.simple_physics_ratio),
+                params,
+            );
         }
 
         std::mem::swap(&mut wheels_temp, &mut self.wheels);
@@ -514,38 +520,31 @@ impl Car {
 
     pub fn get_internal_values(&self) -> InternalCarValues {
         InternalCarValues {
-            local_speed: rotate_around_origin(self.speed.to_pos2(), self.angle).to_vec2(),
-            local_acceleration: rotate_around_origin(self.acceleration.to_pos2(), self.angle)
+            local_speed: rotate_around_origin(self.prev_speed.to_pos2(), -self.angle).to_vec2(),
+            local_acceleration: rotate_around_origin(self.prev_acceleration.to_pos2(), -self.angle)
                 .to_vec2(),
-            angle_acceleration: self.angle_acceleration,
-            angle_speed: self.angle_speed,
+            angle_acceleration: self.prev_angle_acceleration,
+            angle_speed: self.prev_angle_speed,
             wheel_angle: self.wheels[self.rotated_wheels[0]].angle,
         }
     }
 }
 
 pub struct CarInput {
-    pub brake: bool,
+    pub brake: f32, // 0..1
     pub acceleration: f32,
-    pub remove_turn: bool,
+    pub remove_turn: f32, // 0..1
     pub turn: f32,
 }
 
 fn two_relus_to_ratio(a: f32, b: f32) -> f32 {
     if a > b && a > 0. {
-        a.min(1.)
+        sqrt_sigmoid(a)
     } else if b > a && b > 0. {
-        -b.min(1.)
+        -sqrt_sigmoid(b)
     } else {
         0.
     }
-    /*if a > 0. {
-        a.min(1.)
-    } else if b > 0. {
-        -b.min(1.)
-    } else {
-        0.
-    }*/
 }
 
 impl CarInput {
@@ -554,9 +553,9 @@ impl CarInput {
     pub fn from_f32(input: &[f32]) -> CarInput {
         debug_assert!(input.len() == Self::SIZE);
         CarInput {
-            brake: input[0] > 1.,
+            brake: sqrt_sigmoid(input[0]).max(0.),
             acceleration: two_relus_to_ratio(input[1], input[2]),
-            remove_turn: input[3] > 1.,
+            remove_turn: sqrt_sigmoid(input[3]).max(0.),
             turn: two_relus_to_ratio(input[4], input[5]),
         }
     }
@@ -564,25 +563,37 @@ impl CarInput {
 
 impl Car {
     pub fn process_input(&mut self, input: &CarInput, params: &PhysicsParameters) {
-        self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
-            * 10.0
-            * input.acceleration
-            * params.simple_physics_ratio;
-        self.angle -= 0.02 * input.turn * params.simple_physics_ratio;
-        if input.brake {
-            self.brake(params);
+        if input.brake == 0. {
+            self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
+                * 10.0
+                * input.acceleration
+                * params.simple_physics_ratio;
+        }
+
+        if input.remove_turn == 0. {
+            self.angle -= 0.02 * input.turn * params.simple_physics_ratio;
+        }
+
+        if input.brake > 0. {
+            self.brake(input.brake, params);
         } else if input.acceleration > 0. {
             self.move_forward(input.acceleration.abs() * (1. - params.simple_physics_ratio));
         } else if input.acceleration < 0. {
             self.move_backwards(input.acceleration.abs() * (1. - params.simple_physics_ratio));
         }
 
-        if input.remove_turn {
-            self.remove_turns(params);
+        if input.remove_turn > 0. {
+            self.remove_turns(input.remove_turn, params);
         } else if input.turn > 0. {
-            self.turn_left(input.turn.abs() * (1. - params.simple_physics_ratio), params);
+            self.turn_left(
+                input.turn.abs() * (1. - params.simple_physics_ratio),
+                params,
+            );
         } else if input.turn < 0. {
-            self.turn_right(input.turn.abs() * (1. - params.simple_physics_ratio), params);
+            self.turn_right(
+                input.turn.abs() * (1. - params.simple_physics_ratio),
+                params,
+            );
         }
     }
 
@@ -598,9 +609,10 @@ impl Car {
         }
     }
 
-    pub fn brake(&mut self, params: &PhysicsParameters) {
+    pub fn brake(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.up_wheels {
-            self.wheels[*pos].action = WheelAction::Braking(1. - params.simple_physics_ratio);
+            self.wheels[*pos].action =
+                WheelAction::Braking((1. - params.simple_physics_ratio) * ratio);
         }
     }
 
@@ -616,9 +628,10 @@ impl Car {
         }
     }
 
-    pub fn remove_turns(&mut self, params: &PhysicsParameters) {
+    pub fn remove_turns(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
-            self.wheels[*pos].remove_turns = params.wheel_turn_per_time * 5. * (1. - params.simple_physics_ratio);
+            self.wheels[*pos].remove_turns =
+                params.wheel_turn_per_time * 5. * (1. - params.simple_physics_ratio) * ratio;
         }
     }
 
@@ -662,7 +675,13 @@ impl Car {
         }));
     }
 
-    pub fn draw_forces(&self, painter: &Painter, params: &InterfaceParameters, params_phys: &PhysicsParameters, to_screen: &RectTransform) {
+    pub fn draw_forces(
+        &self,
+        painter: &Painter,
+        params: &InterfaceParameters,
+        params_phys: &PhysicsParameters,
+        to_screen: &RectTransform,
+    ) {
         for (pos, dir) in &self.forces {
             painter.add(Shape::LineSegment {
                 points: [
@@ -690,17 +709,23 @@ pub struct InternalCarValues {
 }
 
 impl InternalCarValues {
-    pub const SIZE: usize = 7;
+    pub const SIZE: usize = 9;
+
+    pub fn speed_angle(&self) -> f32 {
+        self.local_speed.y.atan2(self.local_speed.x)
+    }
+
+    pub fn acceleration_angle(&self) -> f32 {
+        self.local_acceleration.y.atan2(self.local_speed.x)
+    }
 
     pub fn to_f32(&self) -> [f32; Self::SIZE] {
         [
-            // self.local_speed.x,
-            // self.local_speed.y,
-            self.local_speed.y.atan2(self.local_speed.x),
+            self.speed_angle().sin(),
+            self.speed_angle().cos(),
             self.local_speed.length(),
-            // self.local_acceleration.x,
-            // self.local_acceleration.y,
-            self.local_acceleration.y.atan2(self.local_speed.x),
+            self.acceleration_angle().sin(),
+            self.acceleration_angle().cos(),
             self.local_acceleration.length(),
             self.angle_acceleration,
             self.angle_speed,
@@ -875,8 +900,8 @@ impl Wall {
     }
 }
 
-impl StorageElem2 for Wall {
-    fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
+impl Wall {
+    pub fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
         egui::Grid::new(data_id.with("wall_grid"))
             .num_columns(2)
             .spacing([40.0, 4.0])
@@ -967,8 +992,8 @@ impl Default for Reward {
     }
 }
 
-impl StorageElem2 for Reward {
-    fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
+impl Reward {
+    pub fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
         egui::Grid::new(data_id.with("wall_grid"))
             .num_columns(2)
             .spacing([40.0, 4.0])

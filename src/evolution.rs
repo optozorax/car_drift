@@ -1,3 +1,4 @@
+use differential_evolution::Population;
 use crate::common::pairs;
 use crate::common::*;
 use crate::math::*;
@@ -1358,7 +1359,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
 
     while params_sim.simulation_simple_physics >= 0. {
         let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
-            .population_size(20)
+            .population_size(100)
             .build(|x: &DVector<f64>| -> f64 {
                 let evals = eval_nn(
                     from_dvector_to_nn(nn_sizes.clone(), x),
@@ -1369,7 +1370,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
             })
             .unwrap();
         let now = Instant::now();
-        for pos in 0..50 {
+        for pos in 0..500 {
             let _ = state.next();
             let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
             if pos == 0 {
@@ -1387,9 +1388,9 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
                     &params_sim,
                 ));
             }
-            // if pos % 20 == 0 && pos != 0 {
-            //     println!("(vec!{:?}, vec!{:?})", nn_sizes, from_dvector_to_nn(nn_sizes.clone(), point).get_values());
-            // }
+            if pos % 10 == 0 && pos != 0 {
+                println!("(vec!{:?}, vec!{:?})", nn_sizes, from_dvector_to_nn(nn_sizes.clone(), point).get_values());
+            }
         }
         let solution = state.overall_best_individual().unwrap().point.clone();
 
@@ -1418,6 +1419,57 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         println!("------------------------------------");
         println!("------------------------------------");
     }
+}
+
+pub fn evolve_by_cma_es_custom(
+    params_sim: &SimulationParameters,
+    params_phys: &PhysicsParameters,
+    nn_input: &[f32],
+    population_size: usize,
+    generations_count: usize
+) -> Vec<f32> {
+    let nn_sizes = params_sim.nn.get_nn_sizes();
+    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let input_done: Vec<f64> = nn_input.iter().map(|x| *x as f64).collect();
+    assert_eq!(input_done.len(), nn_len);
+
+    let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
+        .population_size(population_size)
+        .build(|x: &DVector<f64>| -> f64 {
+            let evals = eval_nn(
+                from_dvector_to_nn(nn_sizes.clone(), x),
+                params_phys,
+                params_sim,
+            );
+            -sum_evals(&evals, params_sim) as f64
+        })
+        .unwrap();
+    for pos in 0..generations_count {
+        let now = Instant::now();
+        let _ = state.next_parallel();
+        let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
+
+        let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+        let true_value = sum_evals(&eval_nn(
+            from_dvector_to_nn(nn_sizes.clone(), point),
+            params_phys,
+            &true_params_sim,
+        ), &true_params_sim);
+        println!("{pos}. {value:.2}, [{true_value:.2}] | {:?}", now.elapsed());
+    }
+
+    let result = state.overall_best_individual().unwrap().point.clone().as_slice().iter().map(|x| *x as f32).collect::<Vec<f32>>();
+
+    println!("(vec!{:?}, vec!{:?})", nn_sizes, &result);
+
+    let evals = eval_nn(
+        from_slice_to_nn(nn_sizes.clone(), &result),
+        params_phys,
+        params_sim,
+    );
+    print_evals(&evals);
+
+    result
 }
 
 #[inline(always)]
@@ -1659,8 +1711,11 @@ impl Default for NnParameters {
             pass_internals: true,
             pass_prev_output: false,
             dirs_size: 5,
+            // dirs_size: 11,
             pass_next_size: 0,
+            // pass_next_size: 3,
             hidden_layers: vec![6, 6],
+            // hidden_layers: vec![20, 10],
             inv_distance: true,
         }
     }
@@ -1677,12 +1732,12 @@ impl Default for SimulationParameters {
                 .into_iter()
                 .chain(
                     vec![
-                        // "straight",
-                        // "straight_45",
-                        // "turn_right_smooth",
-                        // "smooth_left_and_right",
-                        // "turn_left_90",
-                        // "turn_left_180",
+                        "straight",
+                        "straight_45",
+                        "turn_right_smooth",
+                        "smooth_left_and_right",
+                        "turn_left_90",
+                        "turn_left_180",
                         "complex",
                     ]
                     .into_iter()
@@ -1706,27 +1761,106 @@ impl Default for SimulationParameters {
             simulation_simple_physics: 0.0,
 
             eval_skip_passed_tracks: false,
-            eval_add_min_distance: true,
+            eval_add_min_distance: false,
             eval_reward: Clamped::new(10., 0., 5000.),
-            eval_early_finish: Clamped::new(1000., 0., 5000.),
+            eval_early_finish: Clamped::new(10000., 0., 5000.),
             eval_distance: Clamped::new(1000., 0., 5000.),
             eval_acquired: Clamped::new(1000., 0., 5000.),
-            eval_penalty: Clamped::new(2000., 0., 5000.),
+            eval_penalty: Clamped::new(20., 0., 5000.),
 
             nn: Default::default(),
         }
     }
 }
 
-pub const RUN_EVOLUTION: bool = false;
-pub const RUN_FROM_PREV_NN: bool = true;
+impl SimulationParameters {
+    fn true_metric(simple_physics: f32) -> Self {
+        let mut result = Self::default();
+        result.enable_all_tracks();
+        result.simulation_stop_penalty.value = 1000.;
+        result.simulation_steps_quota = 4000;
+        result.simulation_simple_physics = simple_physics;
+        result.eval_reward.value = 0.;
+        result.eval_acquired.value = 0.;
+        result.eval_penalty.value = 1000.;
+        result
+    }
+
+    fn disable_all_tracks(&mut self) {
+        for enabled in self.tracks_enabled.values_mut() {
+            *enabled = false;
+        }
+    }
+    fn enable_all_tracks(&mut self) {
+        for enabled in self.tracks_enabled.values_mut() {
+            *enabled = true;
+        }
+    }
+    fn enable_track(&mut self, track: &str) {
+        *self.tracks_enabled.get_mut(track).unwrap() = true;
+    }
+    fn disable_track(&mut self, track: &str) {
+        *self.tracks_enabled.get_mut(track).unwrap() = false;
+    }
+}
+
+pub const RUN_EVOLUTION: bool = true;
+pub const RUN_FROM_PREV_NN: bool = false;
 
 pub fn evolution() {
-    let params = SimulationParameters::default();
+    let mut params_sim = SimulationParameters::default();
+    let params_phys = PhysicsParameters::default();
+    let mut rng = thread_rng();
+    let nn_sizes = params_sim.nn.get_nn_sizes();
+    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let mut input = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
+
+    params_sim.enable_all_tracks();
+    params_sim.simulation_simple_physics = 0.;
+    params_sim.eval_penalty.value = 10.;
+    params_sim.rewards_add_each_acquire = true;
+    params_sim.rewards_enable_distance_integral = true;
+    params_sim.simulation_scale_reward_to_time = true;
+    params_sim.eval_add_min_distance = true;
+    params_sim.eval_skip_passed_tracks = true;
+    params_sim.simulation_stop_penalty.value = 50.;
+
+    input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 20);
+
+    params_sim.eval_skip_passed_tracks = false;
+    params_sim.eval_penalty.value *= 2.;
+    params_sim.simulation_stop_penalty.value /= 2.;
+
+    input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 15);
+
+    // params_sim.eval_penalty.value *= 2.;
+    // params_sim.simulation_stop_penalty.value /= 2.;
+
+    // input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 15);
+
+    // params_sim.rewards_add_each_acquire = false;
+    // params_sim.rewards_enable_distance_integral = false;
+    // params_sim.simulation_scale_reward_to_time = false;
+    // params_sim.eval_add_min_distance = false;
+    // params_sim.eval_skip_passed_tracks = false;
+
+    // input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 15);
+
+    // for simple_physics in (0..10).map(|x| x as f32 / 10.) {
+    //     params_sim.simulation_simple_physics = simple_physics;
+    //     input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 30);
+    // }
+
+    // params_sim.disable_all_tracks();
+    // params_sim.enable_track("complex");
+    // params_sim.tracks_enable_mirror = false;
+    // params_sim.eval_early_finish.value *= 5.;
+
+    // input = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 50, 30);
 
     // mutate_nn();
     // evolve_by_differential_evolution(&params);
-    evolve_by_cma_es(&params);
+    // evolve_by_cma_es(&params);
     // evolve_by_bfgs(&params);
     // calc_gradient(&params);
 }

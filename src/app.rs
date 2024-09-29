@@ -244,9 +244,9 @@ impl eframe::App for TemplateApp {
         let escape_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let wheel = ctx.input(|i| i.smooth_scroll_delta);
 
-        if self.current_edit >= self.points.len() {
-            self.current_edit = self.points.len() - 1;
-        }
+        // if self.current_edit >= self.points.len() {
+        //     self.current_edit = self.points.len() - 1;
+        // }
 
         let mut walls: Vec<Wall> = Default::default();
         let mut rewards: Vec<Reward> = Default::default();
@@ -576,6 +576,7 @@ impl eframe::App for TemplateApp {
                                         dpenalty,
                                         dirs,
                                         internals,
+                                        &self.params_sim,
                                     );
                                     self.graphs.add_point(
                                         "output",

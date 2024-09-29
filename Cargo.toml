@@ -20,9 +20,10 @@ eframe = { version = "0.28", default-features = false, features = [
 log = "0.4"
 egui_plot = "0.28.1"
 rand = "0.8.5"
+getrandom = {version = "0.2.15", features = ["js"] }
 differential-evolution = "0.2.2"
 spiril = { git = "https://github.com/Jeffail/spiril" }
-cmaes = { path = "cmaes" }
+cmaes = { version = "0.2.1", features = [], default-features = false }
 argmin = "0.10.0"
 argmin-math = { version = "0.4.0", features = ["ndarray_v0_15-nolinalg"] }
 finitediff = { version = "0.1.4", features = ["ndarray"] }

@@ -31,6 +31,8 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
+use serde::Serialize;
+use serde::Deserialize;
 
 // Number from 0 to 1
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
@@ -83,6 +85,8 @@ pub struct SimulationParameters {
     rewards_add_each_acquire: bool,     // to get 1 when reward is acquired
     rewards_enable_distance_integral: bool,
     rewards_progress_distance: Clamped, // ratio from 0 to 1000
+    rewards_second_way: bool,
+    rewards_second_way_penalty: bool,
 
     simulation_stop_penalty: Clamped,      // ratio from 0 to 50
     simulation_scale_reward_to_time: bool, // if reward acquired earlier, it will be bigger
@@ -1109,7 +1113,7 @@ impl CarSimulation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TrackEvaluation {
     name: String,
     penalty: f32,
@@ -1143,36 +1147,53 @@ fn print_evals(evals: &[TrackEvaluation]) {
 }
 
 fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f32 {
-    evals
-        .iter()
-        .map(|x| {
-            if x.all_acquired && params.eval_skip_passed_tracks {
-                TrackEvaluation {
-                    name: Default::default(),
-                    penalty: 0.,
-                    reward: 1000.,
-                    early_finish_percent: 1.,
-                    distance_percent: 1.,
-                    rewards_acquired_percent: 1.,
-                    all_acquired: true,
-                }
-                .to_f32(params)
-            } else {
-                x.to_f32(params)
-            }
-        })
-        .sum::<f32>()
-        / evals.len() as f32
-        + if params.eval_add_min_distance {
-            evals
-                .iter()
-                .map(|x| x.distance_percent)
-                .reduce(|a, b| a.min(b))
-                .unwrap_or(0.)
-                * 10000.
+    if params.rewards_second_way {
+        let len = evals.len() as f32;
+        let tracks_sum = evals.iter().map(|x| x.all_acquired as usize as f32).sum::<f32>();
+        let penalty_level_1 = evals.iter().map(|x| (x.penalty < 30.) as usize as f32).sum::<f32>();
+        let penalty_level_2 = evals.iter().map(|x| (x.penalty < 15.) as usize as f32).sum::<f32>();
+        let penalty_level_3 = evals.iter().map(|x| (x.penalty < 5.) as usize as f32).sum::<f32>();
+        let penalty_level_4 = evals.iter().map(|x| (x.penalty < 2.) as usize as f32).sum::<f32>();
+        let penalty_levels_len = 4. * len;
+        let penalty_levels = (penalty_level_1 + penalty_level_2 + penalty_level_3 + penalty_level_4) / penalty_levels_len;
+        let smooth_metrics = evals.iter().map(|x| x.to_f32_second_way()).sum::<f32>();
+        if params.rewards_second_way_penalty {
+            tracks_sum + penalty_levels + smooth_metrics / penalty_levels_len
         } else {
-            0.
+            tracks_sum + smooth_metrics / len
         }
+    } else {
+        evals
+            .iter()
+            .map(|x| {
+                if x.all_acquired && params.eval_skip_passed_tracks {
+                    TrackEvaluation {
+                        name: Default::default(),
+                        penalty: 0.,
+                        reward: 1000.,
+                        early_finish_percent: 1.,
+                        distance_percent: 1.,
+                        rewards_acquired_percent: 1.,
+                        all_acquired: true,
+                    }
+                    .to_f32(params)
+                } else {
+                    x.to_f32(params)
+                }
+            })
+            .sum::<f32>()
+            / evals.len() as f32
+            + if params.eval_add_min_distance {
+                evals
+                    .iter()
+                    .map(|x| x.distance_percent)
+                    .reduce(|a, b| a.min(b))
+                    .unwrap_or(0.)
+                    * 10000.
+            } else {
+                0.
+            }
+    }
 }
 
 impl TrackEvaluation {
@@ -1182,6 +1203,11 @@ impl TrackEvaluation {
             + self.distance_percent * params.eval_distance.value
             + self.rewards_acquired_percent * params.eval_acquired.value
             - self.penalty * params.eval_penalty.value
+    }
+
+    // from 0 to 1
+    fn to_f32_second_way(&self) -> f32 {
+        (1. / (1. + self.penalty) + (1. - 1. / (1. + self.reward)) + self.early_finish_percent + self.distance_percent + self.rewards_acquired_percent) / 5.
     }
 }
 
@@ -1362,14 +1388,12 @@ pub fn evolve_by_differential_evolution_custom(
     params_phys: &PhysicsParameters,
     population_size: usize,
     generations_count: usize,
-    exit_on: f64,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+) -> Vec<EvolveOutputEachStep> {
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
     let input_done: Vec<(f32, f32)> = vec![(-10., 10.); nn_len];
 
-    let mut res_current_value: Vec<f32> = Default::default();
-    let mut res_true_value: Vec<f32> = Default::default();
+    let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(
@@ -1379,6 +1403,9 @@ pub fn evolve_by_differential_evolution_custom(
         );
         -sum_evals(&evals, params_sim)
     });
+
+    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+
     for pos in 0..generations_count {
         let now = Instant::now();
         for _ in 0..population_size {
@@ -1386,36 +1413,28 @@ pub fn evolve_by_differential_evolution_custom(
         }
         let (value, point) = de.best().unwrap();
 
-        let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
-        let true_value = -sum_evals(&eval_nn(
-            from_slice_to_nn(nn_sizes.clone(), point),
+        let nn = from_slice_to_nn(nn_sizes.clone(), point);
+        let evals = eval_nn(
+            nn.clone(),
+            params_phys,
+            &params_sim,
+        );
+        let true_evals = eval_nn(
+            nn.clone(),
             params_phys,
             &true_params_sim,
-        ), &true_params_sim);
-        // let true_value = 0.;
-        // println!("{pos}. {value:.2}, [{true_value:.2}] | {:?}", now.elapsed());
+        );
 
-        res_current_value.push(value as f32);
-        res_true_value.push(true_value);
-
-        // if *value < exit_on {
-        //     // println!("Early exit, because less than: {exit_on}");
-        //     break;
-        // }
+        result.push(EvolveOutputEachStep {
+            nn: nn.get_values().iter().copied().collect(),
+            evals_cost: sum_evals(&evals, params_sim),
+            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            evals,
+            true_evals,
+        });
     }
 
-    let result = de.best().unwrap().1.iter().map(|x| *x as f32).collect::<Vec<f32>>();
-
-    // println!("(vec!{:?}, vec!{:?})", nn_sizes, &result);
-
-    // let evals = eval_nn(
-    //     from_slice_to_nn(nn_sizes.clone(), &result),
-    //     params_phys,
-    //     params_sim,
-    // );
-    // print_evals(&evals);
-
-    (result, res_current_value, res_true_value)
+    result
 }
 
 pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
@@ -1497,21 +1516,28 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct EvolveOutputEachStep {
+    nn: Vec<f32>,
+    evals: Vec<TrackEvaluation>,
+    evals_cost: f32,
+    true_evals: Vec<TrackEvaluation>,
+    true_evals_cost: f32,
+}
+
 pub fn evolve_by_cma_es_custom(
     params_sim: &SimulationParameters,
     params_phys: &PhysicsParameters,
     nn_input: &[f32],
     population_size: usize,
     generations_count: usize,
-    exit_on: f64,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+) -> Vec<EvolveOutputEachStep> {
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
     let input_done: Vec<f64> = nn_input.iter().map(|x| *x as f64).collect();
     assert_eq!(input_done.len(), nn_len);
 
-    let mut res_current_value: Vec<f32> = Default::default();
-    let mut res_true_value: Vec<f32> = Default::default();
+    let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
     let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
         .population_size(population_size)
@@ -1524,42 +1550,37 @@ pub fn evolve_by_cma_es_custom(
             -sum_evals(&evals, params_sim) as f64
         })
         .unwrap();
+
+    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+
     for pos in 0..generations_count {
         let now = Instant::now();
         let _ = state.next();
         // let _ = state.next_parallel();
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
 
-        let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
-        let true_value = -sum_evals(&eval_nn(
-            from_dvector_to_nn(nn_sizes.clone(), point),
+        let nn = from_dvector_to_nn(nn_sizes.clone(), point);
+        let evals = eval_nn(
+            nn.clone(),
+            params_phys,
+            &params_sim,
+        );
+        let true_evals = eval_nn(
+            nn.clone(),
             params_phys,
             &true_params_sim,
-        ), &true_params_sim);
-        // let true_value = 0.;
-        // println!("{pos}. {value:.2}, [{true_value:.2}] | {:?}", now.elapsed());
+        );
 
-        res_current_value.push(*value as f32);
-        res_true_value.push(true_value);
-
-        // if *value < exit_on {
-        //     // println!("Early exit, because less than: {exit_on}");
-        //     break;
-        // }
+        result.push(EvolveOutputEachStep {
+            nn: nn.get_values().iter().copied().collect(),
+            evals_cost: sum_evals(&evals, params_sim),
+            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            evals,
+            true_evals,
+        });
     }
 
-    let result = state.overall_best_individual().unwrap().point.clone().as_slice().iter().map(|x| *x as f32).collect::<Vec<f32>>();
-
-    // println!("(vec!{:?}, vec!{:?})", nn_sizes, &result);
-
-    // let evals = eval_nn(
-    //     from_slice_to_nn(nn_sizes.clone(), &result),
-    //     params_phys,
-    //     params_sim,
-    // );
-    // print_evals(&evals);
-
-    (result, res_current_value, res_true_value)
+    result
 }
 
 #[inline(always)]
@@ -1768,8 +1789,7 @@ pub fn evolve_by_particle_swarm_custom(
     params_phys: &PhysicsParameters,
     population_size: usize,
     generations_count: usize,
-    exit_on: f64,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+) -> Vec<EvolveOutputEachStep> {
     use argmin::solver::conjugategradient::beta::*;
     use argmin::solver::conjugategradient::*;
     use argmin::solver::gradientdescent::SteepestDescent;
@@ -1824,44 +1844,36 @@ pub fn evolve_by_particle_swarm_custom(
     let mut state = PopulationState::new();
     state = solver.init(&mut problem, state).unwrap().0;
 
-    let mut res_current_value: Vec<f32> = Default::default();
-    let mut res_true_value: Vec<f32> = Default::default();
+    let mut result: Vec<EvolveOutputEachStep> = Default::default();
+
+    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
 
     for pos in 0..generations_count {
         let now = Instant::now();
         state = solver.next_iter(&mut problem, state).unwrap().0;
         let (point, value) = (&state.individual.as_ref().unwrap().position, state.cost);
-
-        let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
-        let true_value = -sum_evals(&eval_nn(
-            from_slice_to_nn_f64(nn_sizes.clone(), point.as_slice().unwrap()),
+        
+        let nn = from_slice_to_nn_f64(nn_sizes.clone(), point.as_slice().unwrap());
+        let evals = eval_nn(
+            nn.clone(),
+            params_phys,
+            &params_sim,
+        );
+        let true_evals = eval_nn(
+            nn.clone(),
             params_phys,
             &true_params_sim,
-        ), &true_params_sim);
-        // let true_value = 0.;
-        // println!("{pos}. {value:.2}, [{true_value:.2}] | {:?}", now.elapsed());
+        );
 
-        res_current_value.push(value as f32);
-        res_true_value.push(true_value);
-
-        // if *value < exit_on {
-        //     // println!("Early exit, because less than: {exit_on}");
-        //     break;
-        // }
+        result.push(EvolveOutputEachStep {
+            nn: nn.get_values().iter().copied().collect(),
+            evals_cost: sum_evals(&evals, params_sim),
+            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            evals,
+            true_evals,
+        });
     }
-
-    let result = state.individual.unwrap().position.clone().as_slice().unwrap().iter().map(|x| *x as f32).collect::<Vec<f32>>();
-
-    // println!("(vec!{:?}, vec!{:?})", nn_sizes, &result);
-
-    // let evals = eval_nn(
-    //     from_slice_to_nn(nn_sizes.clone(), &result),
-    //     params_phys,
-    //     params_sim,
-    // );
-    // print_evals(&evals);
-
-    (result, res_current_value, res_true_value)
+    result
 }
 
 fn calc_gradient(params_sim: &SimulationParameters) {
@@ -1961,6 +1973,8 @@ impl Default for SimulationParameters {
             rewards_add_each_acquire: false,
             rewards_enable_distance_integral: false,
             rewards_progress_distance: Clamped::new(200., 0., 1000.),
+            rewards_second_way: false,
+            rewards_second_way_penalty: false,
 
             simulation_stop_penalty: Clamped::new(20., 0., 50.),
             simulation_scale_reward_to_time: false,
@@ -1986,15 +2000,18 @@ impl SimulationParameters {
     fn true_metric(simple_physics: f32) -> Self {
         let mut result = Self::default();
         result.enable_all_tracks();
+        result.disable_track("straight_45"); // todo: удалить это и снова проверить
+        result.rewards_second_way = true;
         result.mutate_car_enable = false;
-        result.mutate_car_count = 5;
-        result.mutate_car_angle_range.value = 0.3;
         result.simulation_stop_penalty.value = 100.;
-        result.simulation_steps_quota = 2000;
+        result.simulation_steps_quota = 3000;
         result.simulation_simple_physics = simple_physics;
-        result.eval_reward.value = 0.;
-        result.eval_acquired.value = 0.;
-        result.eval_penalty.value = 1000.;
+        result.eval_reward.value = 1.;
+        result.eval_acquired.value = 1.;
+        result.eval_penalty.value = 1.;
+
+        result.nn.hidden_layers = vec![6, 6];
+
         result
     }
 
@@ -2024,16 +2041,23 @@ pub const RUN_EVOLUTION: bool = true;
 
 pub const RUN_FROM_PREV_NN: bool = false;
 
+const RUNS_COUNT: usize = 100;
+const POPULATION_SIZE: usize = 30;
+const GENERATIONS_COUNT: usize = 500;
+
+// const RUNS_COUNT: usize = 3;
+// const POPULATION_SIZE: usize = 3;
+// const GENERATIONS_COUNT: usize = 3;
+
 fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
     let now = Instant::now();
-    let result: Vec<_> = (0..100).into_par_iter().map(|_| {
+    let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
         let mut rng = thread_rng();
         let mut input = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        let (_, values_current, values_true) = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 30, 200, -31500.);
-        (values_current, values_true)
+        evolve_by_cma_es_custom(&params_sim, &params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT)
     }).collect();
 
     use std::io::Write;
@@ -2050,11 +2074,10 @@ fn test_params_sim_differential_evolution(params_sim: &SimulationParameters, par
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
     let now = Instant::now();
-    let result: Vec<_> = (0..100).into_par_iter().map(|_| {
+    let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
         let mut rng = thread_rng();
         let mut input = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        let (_, values_current, values_true) = evolve_by_differential_evolution_custom(&params_sim, &params_phys, 30, 200, -31500.);
-        (values_current, values_true)
+        evolve_by_differential_evolution_custom(&params_sim, &params_phys, POPULATION_SIZE, GENERATIONS_COUNT)
     }).collect();
 
     use std::io::Write;
@@ -2071,9 +2094,8 @@ fn test_params_sim_particle_swarm(params_sim: &SimulationParameters, params_phys
     let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
 
     let now = Instant::now();
-    let result: Vec<_> = (0..100).into_par_iter().map(|_| {
-        let (_, values_current, values_true) = evolve_by_particle_swarm_custom(&params_sim, &params_phys, 30, 200, -31500.);
-        (values_current, values_true)
+    let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
+        evolve_by_particle_swarm_custom(&params_sim, &params_phys, POPULATION_SIZE, GENERATIONS_COUNT)
     }).collect();
 
     use std::io::Write;
@@ -2088,38 +2110,133 @@ fn test_params_sim_particle_swarm(params_sim: &SimulationParameters, params_phys
 pub fn evolution() {
     let mut params_sim = SimulationParameters::default();
     let mut params_phys = PhysicsParameters::default();
-    params_sim.simulation_simple_physics = 0.;
 
     params_sim.enable_all_tracks();
-    params_sim.simulation_enable_random_nn_output = true;
-    params_sim.simulation_random_output_range = 0.05;
-    params_sim.eval_penalty.value = 100.;
+    params_sim.disable_track("straight_45");
+    params_sim.simulation_enable_random_nn_output = false;
+    params_sim.eval_penalty.value = 200.;
     params_sim.rewards_add_each_acquire = true;
     params_sim.rewards_enable_distance_integral = true;
     params_sim.mutate_car_enable = false;
-    params_sim.eval_add_min_distance = true;
-    params_sim.simulation_stop_penalty.value = 50.;
+    params_sim.eval_add_min_distance = false;
+    params_sim.simulation_stop_penalty.value = 100.;
+    params_sim.simulation_simple_physics = 1.;
 
     let params_sim_copy = params_sim.clone();
 
-    /*
-    test_params_sim(&params_sim, &params_phys, "default");
+    params_sim.disable_all_tracks();
+    params_sim.enable_track("complex");
+    test_params_sim_particle_swarm(&params_sim, &params_phys, "only_complex_track_particle_500");
+    params_sim = params_sim_copy.clone();
+
+    // params_sim.rewards_second_way = true;
+    // params_sim.rewards_second_way_penalty = true;
+    // params_sim.nn.hidden_layers = vec![6, 6];
+    // test_params_sim(&params_sim, &params_phys, "second_way_penalty_nn");
+    // params_sim = params_sim_copy.clone();
+    
+    // test_params_sim(&params_sim, &params_phys, "default");
+
+    //------------------------------------------------------------------------
+
+    // params_sim.rewards_second_way = true;
+    // test_params_sim_differential_evolution(&params_sim, &params_phys, "differential_evolution_second_way_1000");
+    // test_params_sim_particle_swarm(&params_sim, &params_phys, "particle_swarm_second_way_1000");
+
+    //------------------------------------------------------------------------
+
+    // params_sim.rewards_second_way = true;
+    // test_params_sim(&params_sim, &params_phys, "second_way_1000_gens");
+    // params_sim = params_sim_copy.clone();
+
+    /*params_sim.rewards_add_each_acquire = false;
+    test_params_sim(&params_sim, &params_phys, "no_add_each_acquire");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.rewards_enable_distance_integral = false;
+    test_params_sim(&params_sim, &params_phys, "no_distance_integral");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.mutate_car_enable = true;
+    test_params_sim(&params_sim, &params_phys, "mutate_car_enabled");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.eval_add_min_distance = true;
+    test_params_sim(&params_sim, &params_phys, "with_min_distance");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.simulation_scale_reward_to_time = true;
+    test_params_sim(&params_sim, &params_phys, "scale_reward_to_time");
+    params_sim = params_sim_copy.clone();
+
+    //------------------------------------------------------------------------
+
+    params_sim.simulation_simple_physics = 1.0;
+    test_params_sim(&params_sim, &params_phys, "simple_physics_1.0");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.simulation_simple_physics = 0.5;
+    test_params_sim(&params_sim, &params_phys, "simple_physics_0.5");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.simulation_simple_physics = 0.0;
+    test_params_sim(&params_sim, &params_phys, "simple_physics_0.0");
+    params_sim = params_sim_copy.clone();
+
+    //------------------------------------------------------------------------
+
+    params_sim.disable_track("complex");
+    test_params_sim(&params_sim, &params_phys, "no_tr_complex");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.enable_track("straight_45");
+    test_params_sim(&params_sim, &params_phys, "with_tr_45");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.disable_track("turn_left_90");
+    params_sim.disable_track("turn_left_180");
+    test_params_sim(&params_sim, &params_phys, "no_tr_turns");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.disable_all_tracks();
+    params_sim.enable_track("complex");
+    test_params_sim(&params_sim, &params_phys, "only_complex_track");
+    params_sim = params_sim_copy.clone();
+    
+    params_sim.disable_track("turn_left_90");
+    params_sim.disable_track("turn_left_180");
+    params_sim.disable_track("complex");
+    params_sim.disable_track("straight_45");
+    test_params_sim(&params_sim, &params_phys, "only_tr_simple");
+    params_sim = params_sim_copy.clone();
+
+    //------------------------------------------------------------------------
 
     params_sim.simulation_enable_random_nn_output = false;
-    test_params_sim(&params_sim, &params_phys, "no_random_output");
+    test_params_sim(&params_sim, &params_phys, "random_output_no");
     params_sim = params_sim_copy.clone();
 
     params_sim.simulation_random_output_range = 0.01;
+    params_sim.simulation_enable_random_nn_output = true;
     test_params_sim(&params_sim, &params_phys, "random_output_0.01");
     params_sim = params_sim_copy.clone();
 
+    params_sim.simulation_random_output_range = 0.05;
+    params_sim.simulation_enable_random_nn_output = true;
+    test_params_sim(&params_sim, &params_phys, "random_output_0.05");
+    params_sim = params_sim_copy.clone();
+
     params_sim.simulation_random_output_range = 0.1;
+    params_sim.simulation_enable_random_nn_output = true;
     test_params_sim(&params_sim, &params_phys, "random_output_0.1");
     params_sim = params_sim_copy.clone();
 
     params_sim.simulation_random_output_range = 0.2;
+    params_sim.simulation_enable_random_nn_output = true;
     test_params_sim(&params_sim, &params_phys, "random_output_0.2");
     params_sim = params_sim_copy.clone();
+
+    //------------------------------------------------------------------------
 
     params_sim.eval_penalty.value = 0.;
     test_params_sim(&params_sim, &params_phys, "penalty_0");
@@ -2131,6 +2248,10 @@ pub fn evolution() {
 
     params_sim.eval_penalty.value = 50.;
     test_params_sim(&params_sim, &params_phys, "penalty_50");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.eval_penalty.value = 50.;
+    test_params_sim(&params_sim, &params_phys, "penalty_100");
     params_sim = params_sim_copy.clone();
 
     params_sim.eval_penalty.value = 200.;
@@ -2145,21 +2266,7 @@ pub fn evolution() {
     test_params_sim(&params_sim, &params_phys, "penalty_1000");
     params_sim = params_sim_copy.clone();
 
-    params_sim.rewards_add_each_acquire = false;
-    test_params_sim(&params_sim, &params_phys, "no_add_each_acquire");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.rewards_enable_distance_integral = false;
-    test_params_sim(&params_sim, &params_phys, "no_distance_integral");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.mutate_car_enable = true;
-    test_params_sim(&params_sim, &params_phys, "mutate_car_enabled");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.eval_add_min_distance = false;
-    test_params_sim(&params_sim, &params_phys, "no_min_distance");
-    params_sim = params_sim_copy.clone();
+    //------------------------------------------------------------------------
 
     params_sim.simulation_stop_penalty.value = 0.;
     test_params_sim(&params_sim, &params_phys, "stop_penalty_0");
@@ -2185,6 +2292,12 @@ pub fn evolution() {
     test_params_sim(&params_sim, &params_phys, "stop_penalty_50");
     params_sim = params_sim_copy.clone();
 
+    params_sim.simulation_stop_penalty.value = 100.;
+    test_params_sim(&params_sim, &params_phys, "stop_penalty_100");
+    params_sim = params_sim_copy.clone();
+
+    //------------------------------------------------------------------------
+
     params_sim.eval_reward.value = 0.;
     test_params_sim(&params_sim, &params_phys, "reward_0");
     params_sim = params_sim_copy.clone();
@@ -2193,8 +2306,16 @@ pub fn evolution() {
     test_params_sim(&params_sim, &params_phys, "reward_1");
     params_sim = params_sim_copy.clone();
 
+    params_sim.eval_reward.value = 1.;
+    test_params_sim(&params_sim, &params_phys, "reward_10");
+    params_sim = params_sim_copy.clone();
+
     params_sim.eval_reward.value = 50.;
     test_params_sim(&params_sim, &params_phys, "reward_50");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.eval_reward.value = 100.;
+    test_params_sim(&params_sim, &params_phys, "reward_100");
     params_sim = params_sim_copy.clone();
 
     params_sim.eval_reward.value = 200.;
@@ -2208,38 +2329,5 @@ pub fn evolution() {
     params_sim.eval_reward.value = 1000.;
     test_params_sim(&params_sim, &params_phys, "reward_1000");
     params_sim = params_sim_copy.clone();
-
-    
-    params_sim.simulation_scale_reward_to_time = true;
-    test_params_sim(&params_sim, &params_phys, "scale_reward_to_time");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.disable_track("complex");
-    test_params_sim(&params_sim, &params_phys, "no_tr_complex");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.disable_track("straight_45");
-    test_params_sim(&params_sim, &params_phys, "no_tr_45");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.disable_track("turn_left_90");
-    params_sim.disable_track("turn_left_180");
-    test_params_sim(&params_sim, &params_phys, "no_tr_turns");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.disable_all_tracks();
-    params_sim.enable_track("complex");
-    test_params_sim(&params_sim, &params_phys, "only_complex_track");
-    params_sim = params_sim_copy.clone();
-
-    test_params_sim_differential_evolution(&params_sim, &params_phys, "differential_evolution");
-    test_params_sim_particle_swarm(&params_sim, &params_phys, "particle_swarm");
     */
-
-    params_sim.disable_track("turn_left_90");
-    params_sim.disable_track("turn_left_180");
-    params_sim.disable_track("complex");
-    params_sim.disable_track("straight_45");
-    test_params_sim(&params_sim, &params_phys, "only_tr_simple");
-    params_sim = params_sim_copy.clone();
 }

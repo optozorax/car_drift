@@ -13,4 +13,5 @@ target_wasm
 .lycheecache
 cmaes
 
-graphs
+*.json
+*.png

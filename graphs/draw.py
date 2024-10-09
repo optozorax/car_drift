@@ -221,8 +221,6 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 
 # ----------------------------------------------------------------------------
 
-data_default = read_json_file("./default.json")
-
 # draw_graph(
 #     [
 #         {
@@ -252,48 +250,70 @@ data_default = read_json_file("./default.json")
 #     skip_individuals=True,
 # )
 
+draw_graph(
+    [
+        {
+            "data": read_json_file("./second_way.json"),
+            "name": "cma-es",
+            "alpha": 0.5,
+            "color": colors[0],
+            "style": styles[0],
+        },
+        {
+            "data": read_json_file("./differential_evolution_2w.json"),
+            "name": "differential evolution",
+            "alpha": 0.5,
+            "color": colors[1],
+            'style': styles[1],
+        },
+        {
+            "data": read_json_file("./particle_swarm_2w.json"),
+            "name": "particle swarm",
+            "alpha": 0.5,
+            "color": colors[2],
+            'style': styles[2],
+        },
+    ],
+    "Optimization algorithms, second way metric",
+    "_optimization_algorithms_2w.png",
+    skip_individuals=True,
+)
+
 # draw_graph(
 #     [
 #         {
 #             "data": read_json_file("./penalty_0.json"),
 #             "name": "0 penalty",
-#             "alpha": 0.5,
 #             "color": colors[0],
 #         },
 #         {
 #             "data": read_json_file("./penalty_10.json"),
 #             "name": "10 penalty",
-#             "alpha": 0.5,
 #             "color": colors[1],
 #         },
 #         {
 #             "data": read_json_file("./penalty_50.json"),
 #             "name": "50 penalty",
-#             "alpha": 0.5,
 #             "color": colors[2],
 #         },
 #         {
 #             "data": read_json_file("./penalty_100.json"),
 #             "name": "100 penalty",
-#             "alpha": 0.5,
 #             "color": colors[3],
 #         },
 #         {
 #             "data": read_json_file("./penalty_200.json"),
 #             "name": "200 penalty",
-#             "alpha": 0.5,
 #             "color": colors[4],
 #         },
 #         {
 #             "data": read_json_file("./penalty_500.json"),
 #             "name": "500 penalty",
-#             "alpha": 0.5,
 #             "color": colors[5],
 #         },
 #         {
 #             "data": read_json_file("./penalty_1000.json"),
 #             "name": "1000 penalty",
-#             "alpha": 0.5,
 #             "color": colors[6],
 #         },
 #     ],
@@ -309,32 +329,32 @@ data_default = read_json_file("./default.json")
 #         {
 #             "data": read_json_file("./random_output_no.json"),
 #             "name": "0 random output",
-#             "alpha": 0.5,
 #             "color": colors[0],
 #         },
 #         {
 #             "data": read_json_file("./random_output_0.01.json"),
 #             "name": "0.01 random output",
-#             "alpha": 0.5,
 #             "color": colors[1],
 #         },
 #         {
 #             "data": read_json_file("./random_output_0.05.json"),
 #             "name": "0.05 random output",
-#             "alpha": 0.5,
 #             "color": colors[2],
 #         },
 #         {
 #             "data": read_json_file("./random_output_0.1.json"),
 #             "name": "0.1 random output",
-#             "alpha": 0.5,
 #             "color": colors[3],
 #         },
 #         {
 #             "data": read_json_file("./random_output_0.2.json"),
 #             "name": "0.2 random output",
-#             "alpha": 0.5,
 #             "color": colors[4],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.4.json"),
+#             "name": "0.4 random output",
+#             "color": colors[5],
 #         },
 #     ],
 #     "Random output",
@@ -347,45 +367,78 @@ data_default = read_json_file("./default.json")
 # draw_graph(
 #     [
 #         {
+#             "data": read_json_file("./random_output_no_2w.json"),
+#             "name": "0 random output",
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.01_2w.json"),
+#             "name": "0.01 random output",
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.05_2w.json"),
+#             "name": "0.05 random output",
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.1_2w.json"),
+#             "name": "0.1 random output",
+#             "color": colors[3],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.2_2w.json"),
+#             "name": "0.2 random output",
+#             "color": colors[4],
+#         },
+#         {
+#             "data": read_json_file("./random_output_0.4_2w.json"),
+#             "name": "0.4 random output",
+#             "color": colors[5],
+#         },
+#     ],
+#     "Random output, second way metric",
+#     "_random_output_2w.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+# draw_graph(
+#     [
+#         {
 #             "data": read_json_file("./reward_0.json"),
 #             "name": "0 reward",
-#             "alpha": 0.5,
 #             "color": colors[0],
 #         },
 #         {
 #             "data": read_json_file("./reward_10.json"),
 #             "name": "10 reward",
-#             "alpha": 0.5,
 #             "color": colors[1],
 #         },
 #         {
 #             "data": read_json_file("./reward_50.json"),
 #             "name": "50 reward",
-#             "alpha": 0.5,
 #             "color": colors[2],
 #         },
 #         {
 #             "data": read_json_file("./reward_100.json"),
 #             "name": "100 reward",
-#             "alpha": 0.5,
 #             "color": colors[3],
 #         },
 #         {
 #             "data": read_json_file("./reward_200.json"),
 #             "name": "200 reward",
-#             "alpha": 0.5,
 #             "color": colors[4],
 #         },
 #         {
 #             "data": read_json_file("./reward_500.json"),
 #             "name": "500 reward",
-#             "alpha": 0.5,
 #             "color": colors[5],
 #         },
 #         {
 #             "data": read_json_file("./reward_1000.json"),
 #             "name": "1000 reward",
-#             "alpha": 0.5,
 #             "color": colors[6],
 #         },
 #     ],
@@ -422,6 +475,35 @@ data_default = read_json_file("./default.json")
 #     ],
 #     "Simple physics",
 #     "_simple_physics.png",
+#     skip_individuals=True,
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./simple_physics_0.0_2w.json"),
+#             "name": "0 simple physics",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#             "style": styles[0],
+#         },
+#         {
+#             "data": read_json_file("./simple_physics_0.5_2w.json"),
+#             "name": "0.5 simple physics",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#             'style': styles[1],
+#         },
+#         {
+#             "data": read_json_file("./simple_physics_1.0_2w.json"),
+#             "name": "1.0 simple physics",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#             'style': styles[2],
+#         },
+#     ],
+#     "Simple physics, second way metric",
+#     "_simple_physics_2w.png",
 #     skip_individuals=True,
 # )
 
@@ -477,28 +559,99 @@ data_default = read_json_file("./default.json")
 #     disable_percentiles=True,
 # )
 
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./stop_penalty_0_2w.json"),
+#             "name": "0 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_1_2w.json"),
+#             "name": "1 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_5_2w.json"),
+#             "name": "5 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_10_2w.json"),
+#             "name": "10 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_20_2w.json"),
+#             "name": "20 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[4],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_50_2w.json"),
+#             "name": "50 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[5],
+#         },
+#         {
+#             "data": read_json_file("./stop_penalty_100_2w.json"),
+#             "name": "100 stop penalty",
+#             "alpha": 0.5,
+#             "color": colors[6],
+#         },
+#     ],
+#     "Stop penalty, second way metric",
+#     "_stop_penalties_2w.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+data_default = read_json_file("./default.json")
+data_2w = read_json_file("./second_way.json")
 for file_name in json_files:
-    # if file_name == "second_way.json":
+    # if file_name != "only_complex_track_particle_1000.json":
     #     continue
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)
-
-    draw_graph(
-        [
-            {
-                "data": data,
-                "name": "current",
-            },
-            {
-                "data": data_default,
-                "name": "default",
-                "color": 'gray',
-                "alpha": 0.5,
-                'style': 'dashed',
-            }
-        ],
-        f'Graphs for {file_name}',
-        f'{file_name}_graphs.png',
-    )
-
+    if file_name.endswith("_2w.json"):
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_2w,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
+    else:
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_default,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
     print(f"Finish drawing for {file_name}")

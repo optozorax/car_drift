@@ -1,3 +1,4 @@
+use crate::nn::*;
 use crate::common::*;
 use crate::evolution::*;
 use crate::physics::*;
@@ -157,11 +158,29 @@ pub struct TemplateApp {
     override_nn: bool,
 
     quota: usize,
+
+    #[serde(skip)]
+    all_tracks: Vec<Track>,
+
+    current_track: String,
+
+    current_nn: String,
 }
 
 impl Default for TemplateApp {
     fn default() -> Self {
-        let params_sim = SimulationParameters::default();
+        let mut params_sim = SimulationParameters::default();
+        params_sim.enable_all_tracks();
+        params_sim.simulation_enable_random_nn_output = false;
+        params_sim.eval_penalty.value = 200.;
+        params_sim.rewards_add_each_acquire = true;
+        params_sim.rewards_enable_distance_integral = true;
+        params_sim.mutate_car_enable = false;
+        params_sim.eval_add_min_distance = false;
+        params_sim.simulation_stop_penalty.value = 100.;
+        params_sim.simulation_simple_physics = 1.;
+        params_sim.rewards_second_way = true;
+
         Self {
             rng: StdRng::seed_from_u64(42),
 
@@ -172,7 +191,7 @@ impl Default for TemplateApp {
 
             params_intr: Default::default(),
             params_phys: Default::default(),
-            params_sim: Default::default(),
+            params_sim: params_sim.clone(),
 
             points: Vec::default(),
             current_edit: 0,
@@ -183,26 +202,19 @@ impl Default for TemplateApp {
 
             quota: 0,
 
-            nn_processor: NnProcessor::new_from_nn_data(Default::default()),
+            nn_processor: NnProcessor::new(NeuralNetwork::new(NnParameters::default().get_nn_sizes()), Default::default()),
 
             simulation: CarSimulation::new(
-                mutate_car(Default::default(), &params_sim),
-                // track_straight_line().walls,
-                // track_straight_line().rewards,
+                Default::default(),
                 track_complex().walls,
                 track_complex().rewards,
-                // track_smooth_left_and_right().walls,
-                // track_smooth_left_and_right().rewards,
-                // track_turn_left_180().walls,
-                // track_turn_left_180().rewards,
-                // mirror_horizontally(track_complex()).walls,
-                // mirror_horizontally(track_complex()).rewards,
-                // mirror_horizontally(track_turn_right_smooth()).walls,
-                // mirror_horizontally(track_turn_right_smooth()).rewards,
-                // mirror_horizontally(track_straight_45()).walls,
-                // mirror_horizontally(track_straight_45()).rewards,
                 &params_sim,
             ),
+
+            all_tracks: get_all_tracks().into_iter().flat_map(|x| vec![x.clone(), mirror_horizontally(x)]).collect(),
+            current_track: "complex".to_string(),
+
+            current_nn: Default::default(),
         }
     }
 }
@@ -222,7 +234,6 @@ impl TemplateApp {
 impl TemplateApp {
     fn reset_car(&mut self) {
         self.simulation.reset();
-        self.simulation.car = mutate_car(Default::default(), &self.params_sim);
         self.trajectories.clear();
         self.graphs.clear();
         self.points_count = 0;
@@ -268,6 +279,64 @@ impl eframe::App for TemplateApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
+                        egui::ComboBox::from_label("track")
+                            .selected_text(self.current_track.clone())
+                            .show_ui(ui, |ui| {
+                                let mut to_reset = false;
+                                for track in &self.all_tracks {
+                                    if ui.selectable_value(&mut self.current_track, track.name.clone(), track.name.clone()).changed() {
+                                        self.simulation = CarSimulation::new(
+                                            Default::default(),
+                                            track.walls.clone(),
+                                            track.rewards.clone(),
+                                            &self.params_sim,
+                                        );
+                                        to_reset = true;
+                                    }
+                                }
+                                if to_reset {
+                                    self.reset_car();
+                                }
+                            }
+                        );
+
+                        ui.label("NN weights json:");
+                        ui.text_edit_multiline(&mut self.current_nn);
+                        if ui.button("Set NN").clicked() {
+                            let numbers: Vec<f32> = match serde_json::from_str(&self.current_nn) {
+                                Ok(ok) => ok,
+                                Err(err) => {
+                                    dbg!(err);
+                                    Default::default()
+                                }
+                            };
+                            let nn_sizes = self.params_sim.nn.get_nn_sizes();
+                            let nn_len = self.params_sim.nn.get_nn_len();
+                            if numbers.len() == nn_len {
+                                self.current_nn.clear();
+                                let mut nn = NeuralNetwork::new(nn_sizes);
+                                nn
+                                    .get_values_mut()
+                                    .iter_mut()
+                                    .zip(numbers.iter())
+                                    .for_each(|(x, y)| *x = *y);
+                                let true_params_sim = SimulationParameters::true_metric(self.params_sim.simulation_simple_physics);
+                                let true_evals = eval_nn(nn.clone(), &self.params_phys, &true_params_sim);
+                                print_evals(&true_evals);
+                                println!("Cost: {}", sum_evals(&true_evals, &true_params_sim));
+                                println!("-----");
+                                self.nn_processor = NnProcessor::new(nn, self.params_sim.nn.clone());
+                                self.reset_car();
+                            } else {
+                                println!("Wrong size: expected {nn_len}, got: {}", numbers.len());
+                            }
+                        }
+
+                        if ui.button("Mutate car").clicked() {
+                            self.reset_car();
+                            self.simulation.car = mutate_car(Default::default(), &self.params_sim);
+                        }
+
                         // self.params_sim.ui(ui);
                         // self.params_phys.ui(ui);
                         // self.params_intr.ui(ui);

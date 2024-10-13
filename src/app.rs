@@ -180,6 +180,11 @@ impl Default for TemplateApp {
         params_sim.simulation_stop_penalty.value = 100.;
         params_sim.simulation_simple_physics = 1.;
         params_sim.rewards_second_way = true;
+        params_sim.evolve_simple_physics = true;
+
+        params_sim.nn.pass_internals = true;
+        params_sim.nn.pass_simple_physics_value = false;
+        params_sim.nn.view_angle_ratio = 5. / 6.;
 
         Self {
             rng: StdRng::seed_from_u64(42),
@@ -202,7 +207,7 @@ impl Default for TemplateApp {
 
             quota: 0,
 
-            nn_processor: NnProcessor::new(NeuralNetwork::new(NnParameters::default().get_nn_sizes()), Default::default()),
+            nn_processor: NnProcessor::new(NeuralNetwork::new(NnParameters::default().get_nn_sizes()), Default::default(), 1.0),
 
             simulation: CarSimulation::new(
                 Default::default(),
@@ -312,7 +317,7 @@ impl eframe::App for TemplateApp {
                             };
                             let nn_sizes = self.params_sim.nn.get_nn_sizes();
                             let nn_len = self.params_sim.nn.get_nn_len();
-                            if numbers.len() == nn_len {
+                            if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
                                 self.current_nn.clear();
                                 let mut nn = NeuralNetwork::new(nn_sizes);
                                 nn
@@ -320,12 +325,13 @@ impl eframe::App for TemplateApp {
                                     .iter_mut()
                                     .zip(numbers.iter())
                                     .for_each(|(x, y)| *x = *y);
-                                let true_params_sim = SimulationParameters::true_metric(self.params_sim.simulation_simple_physics);
-                                let true_evals = eval_nn(nn.clone(), &self.params_phys, &true_params_sim);
+                                self.params_sim = patch_params_sim(&numbers, &self.params_sim);
+                                let true_params_sim = SimulationParameters::true_metric(&self.params_sim);
+                                let true_evals = eval_nn(&numbers, &self.params_phys, &true_params_sim);
                                 print_evals(&true_evals);
                                 println!("Cost: {}", sum_evals(&true_evals, &true_params_sim));
                                 println!("-----");
-                                self.nn_processor = NnProcessor::new(nn, self.params_sim.nn.clone());
+                                self.nn_processor = NnProcessor::new(nn, self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics);
                                 self.reset_car();
                             } else {
                                 println!("Wrong size: expected {nn_len}, got: {}", numbers.len());
@@ -337,7 +343,7 @@ impl eframe::App for TemplateApp {
                             self.simulation.car = mutate_car(Default::default(), &self.params_sim);
                         }
 
-                        // self.params_sim.ui(ui);
+                        self.params_sim.ui(ui);
                         // self.params_phys.ui(ui);
                         // self.params_intr.ui(ui);
 

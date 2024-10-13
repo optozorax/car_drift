@@ -15,3 +15,7 @@ cmaes
 
 *.json
 *.png
+*.zip
+
+.stignore
+.stfolder

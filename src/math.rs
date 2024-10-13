@@ -42,7 +42,12 @@ pub fn inv_len(a: impl Into<Vec2> + std::marker::Copy) -> f32 {
     if res == 0. {
         0.
     } else {
-        1. / res
+        let res = 1. / res;
+        if res.is_infinite() {
+            0.
+        } else {
+            res
+        }
     }
 }
 
@@ -97,7 +102,12 @@ pub fn proj(
     let b = b.into();
     let dot_b = dot(b, b);
     if dot_b != 0. {
-        dot(a, b) / dot_b * b
+        let res = dot(a, b) / dot_b * b;
+        if res.x.is_infinite() || res.y.is_infinite() || res.x.is_nan() || res.y.is_nan() {
+            b
+        } else {
+            res
+        }
     } else {
         b
     }

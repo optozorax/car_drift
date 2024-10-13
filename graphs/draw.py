@@ -45,6 +45,14 @@ all_tracks = [
     "turn_left_90",
     "turn_left_180",
     "complex",
+
+    # "straight_mirror",
+    # "straight_45_mirror",
+    # "turn_right_smooth_mirror",
+    # "smooth_left_and_right_mirror",
+    # "turn_left_90_mirror",
+    # "turn_left_180_mirror",
+    # "complex_mirror",
     # надо ли добавить mirror?
 ]
 
@@ -73,32 +81,37 @@ styles = [
 
 # ----------------------------------------------------------------------------
 
+info_field = "true_evals"
+
 def step_get_eval_value(step):
     return step["evals_cost"]
+
+def step_get_simple_physics(step):
+    return step[info_field][0].get("simple_physics", 1.0)
 
 def step_get_true_eval_value(step):
     return step["true_evals_cost"]
 
 def step_get_track_completed(step, track):
-    if [x for x in step["true_evals"] if x["name"] == track][0]["all_acquired"]:
+    if [x for x in step[info_field] if x["name"] == track][0]["all_acquired"]:
         return 1.0
     else:
         return 0.0
 
 def step_get_penalty_avg(step):
-    return statistics.fmean([x["penalty"] for x in step["true_evals"]])
+    return statistics.fmean([x["penalty"] for x in step[info_field]])
 
 def step_get_penalty_max(step):
-    return max([x["penalty"] for x in step["true_evals"]])
+    return max([x["penalty"] for x in step[info_field]])
 
 def step_get_early_finish_avg(step):
-    return statistics.fmean([x["early_finish_percent"] for x in step["true_evals"]])
+    return statistics.fmean([x["early_finish_percent"] for x in step[info_field]])
 
 def step_get_distance_min(step):
-    return min([x["distance_percent"] for x in step["true_evals"]])
+    return min([x["distance_percent"] for x in step[info_field]])
 
 def step_get_distance_avg(step):
-    return statistics.fmean([x["distance_percent"] for x in step["true_evals"]])
+    return statistics.fmean([x["distance_percent"] for x in step[info_field]])
 
 # ----------------------------------------------------------------------------
 
@@ -114,25 +127,54 @@ def data_has_track(data, track):
             return False
     return False
 
+def pad_losses_nan(losses):
+    max_length = max(len(arr) for arr in losses)
+
+    padded_losses = np.array([
+        np.pad(arr, 
+               (0, max_length - len(arr)), 
+               mode='constant', 
+               constant_values=np.nan) 
+        for arr in losses
+    ])
+    
+    return padded_losses
+
+def pad_losses_repeat_last(losses):
+    max_length = max(len(arr) for arr in losses)
+    
+    padded_losses = np.array([
+        np.pad(arr, 
+               (0, max_length - len(arr)), 
+               mode='edge')
+        for arr in losses
+    ])
+    
+    return padded_losses
+
 def draw_all_values(axs, losses, color, alpha_mul=1.0):
     for loss_arr in losses:
         axs.plot(loss_arr, alpha=0.3 * alpha_mul, color=color)
 
 def draw_sum_values(axs, losses, name, color=None, alpha_mul=1.0, linestyle='solid'):
-    losses_sum = np.sum(losses, axis=0)
+    # losses = pad_losses_nan(losses)
+    losses = pad_losses_repeat_last(losses)
+    losses_sum = np.average(losses, axis=0)
     axs.plot(losses_sum, alpha=alpha_mul, label=name, color=color, linestyle=linestyle)
 
 def draw_values_mean_std(axs, losses, name, color, alpha_mul=1.0, disable_percentiles=False):
-    losses_median = np.median(losses, axis=0)
-    losses_10 = np.percentile(losses, 10, axis=0)
-    losses_25 = np.percentile(losses, 25, axis=0)
-    losses_75 = np.percentile(losses, 75, axis=0)
-    losses_90 = np.percentile(losses, 90, axis=0)
+    # losses = pad_losses_nan(losses)
+    losses = pad_losses_repeat_last(losses)
+    losses_median = np.nanmedian(losses, axis=0)
+    losses_10 = np.nanpercentile(losses, 10, axis=0)
+    losses_25 = np.nanpercentile(losses, 25, axis=0)
+    losses_75 = np.nanpercentile(losses, 75, axis=0)
+    losses_90 = np.nanpercentile(losses, 90, axis=0)
 
     x = range(len(losses_median))
     axs.plot(losses_median, label=name, color=color, alpha=alpha_mul)
+    axs.fill_between(x, losses_25, losses_75, color=color, alpha=0.2 * alpha_mul)
     if not disable_percentiles:
-        axs.fill_between(x, losses_25, losses_75, color=color, alpha=0.2 * alpha_mul)
         axs.fill_between(x, losses_10, losses_25, color=color, alpha=0.05 * alpha_mul)
         axs.fill_between(x, losses_75, losses_90, color=color, alpha=0.05 * alpha_mul)
 
@@ -148,17 +190,20 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
         axs[0, 1].set_title('Validation Loss - Individual Runs')
         axs[0, 1].set(xlabel='Epoch', ylabel='Loss')
 
-    for data in datas_with_style:
-        draw_values_mean_std(axs[offset, 0], process_data(data["data"], step_get_eval_value), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
-    axs[offset, 0].set_title('Training Loss - Mean + Std')
-    axs[offset, 0].set(xlabel='Epoch', ylabel='Loss')
-    axs[offset, 0].legend()
+    if False:
+        for data in datas_with_style:
+            draw_values_mean_std(axs[offset, 0], process_data(data["data"], step_get_eval_value), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+        axs[offset, 0].set_title('Training Loss - Mean + Std')
+        axs[offset, 0].set(xlabel='Epoch', ylabel='Loss')
+        axs[offset, 0].legend()
 
-    for data in datas_with_style:
-        draw_values_mean_std(axs[offset, 1], process_data(data["data"], step_get_true_eval_value), data["name"], data.get('color', 'red'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
-    axs[offset, 1].set_title('Validating Loss - Mean + Std')
-    axs[offset, 1].set(xlabel='Epoch', ylabel='Loss')
-    axs[offset, 1].legend()
+        for data in datas_with_style:
+            draw_values_mean_std(axs[offset, 1], process_data(data["data"], step_get_true_eval_value), data["name"], data.get('color', 'red'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+        axs[offset, 1].set_title('Validating Loss - Mean + Std')
+        axs[offset, 1].set(xlabel='Epoch', ylabel='Loss')
+        axs[offset, 1].legend()
+    else:
+        offset = -1
 
     for (i, track) in enumerate(all_tracks):
         color = colors[i]
@@ -187,12 +232,14 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
     axs[offset+2, 0].set_title('Penalty average')
     axs[offset+2, 0].set(xlabel='Epoch', ylabel='Penalty')
     axs[offset+2, 0].legend()
+    axs[offset+2, 0].set_ylim(top=25)
 
     for data in datas_with_style:
         draw_values_mean_std(axs[offset+2, 1], process_data(data["data"], step_get_penalty_max), data["name"], data.get('color', 'red'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
     axs[offset+2, 1].set_title('Penalty max')
     axs[offset+2, 1].set(xlabel='Epoch', ylabel='Penalty')
     axs[offset+2, 1].legend()
+    # axs[offset+2, 1].set_ylim(top=25)
 
     for data in datas_with_style:
         draw_values_mean_std(axs[offset+3, 0], process_data(data["data"], step_get_distance_avg), data["name"], data.get('color', 'green'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
@@ -206,14 +253,22 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
     axs[offset+3, 1].set(xlabel='Epoch', ylabel='Percent')
     axs[offset+3, 1].legend()
 
+    for data in datas_with_style:
+        draw_values_mean_std(axs[offset+4, 0], process_data(data["data"], step_get_simple_physics), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+    axs[offset+4, 0].set_title('Simple physics value')
+    axs[offset+4, 0].set(xlabel='Epoch', ylabel='Percent')
+    axs[offset+4, 0].legend()
+
 def draw_graph(datas, title, filename, skip_individuals=False, only_complex_track=False, disable_percentiles=False):
+    lines = 4
     if skip_individuals:
-        fig, axs = plt.subplots(4, 2, figsize=(15, 5 * 4))
+        fig, axs = plt.subplots(lines, 2, figsize=(15, 5 * lines))
     else:
-        fig, axs = plt.subplots(5, 2, figsize=(15, 5 * 5))
+        fig, axs = plt.subplots(lines+1, 2, figsize=(15, 5 * (lines+1)))
     fig.suptitle(title)
     draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles)
     for ax in axs.flat:
+        ax.set_xlim(left=-30, right=530)
         ax.grid(axis='both', color='0.85')
     plt.tight_layout()
     plt.savefig(filename)
@@ -250,34 +305,34 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     skip_individuals=True,
 # )
 
-draw_graph(
-    [
-        {
-            "data": read_json_file("./second_way.json"),
-            "name": "cma-es",
-            "alpha": 0.5,
-            "color": colors[0],
-            "style": styles[0],
-        },
-        {
-            "data": read_json_file("./differential_evolution_2w.json"),
-            "name": "differential evolution",
-            "alpha": 0.5,
-            "color": colors[1],
-            'style': styles[1],
-        },
-        {
-            "data": read_json_file("./particle_swarm_2w.json"),
-            "name": "particle swarm",
-            "alpha": 0.5,
-            "color": colors[2],
-            'style': styles[2],
-        },
-    ],
-    "Optimization algorithms, second way metric",
-    "_optimization_algorithms_2w.png",
-    skip_individuals=True,
-)
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./second_way.json"),
+#             "name": "cma-es",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#             "style": styles[0],
+#         },
+#         {
+#             "data": read_json_file("./differential_evolution_2w.json"),
+#             "name": "differential evolution",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#             'style': styles[1],
+#         },
+#         {
+#             "data": read_json_file("./particle_swarm_2w.json"),
+#             "name": "particle swarm",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#             'style': styles[2],
+#         },
+#     ],
+#     "Optimization algorithms, second way metric",
+#     "_optimization_algorithms_2w.png",
+#     skip_individuals=True,
+# )
 
 # draw_graph(
 #     [
@@ -611,47 +666,197 @@ draw_graph(
 #     disable_percentiles=True,
 # )
 
-data_default = read_json_file("./default.json")
-data_2w = read_json_file("./second_way.json")
-for file_name in json_files:
-    # if file_name != "only_complex_track_particle_1000.json":
-    #     continue
-    file_path = os.path.join('.', file_name)
-    data = read_json_file(file_path)
-    if file_name.endswith("_2w.json"):
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_2w,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    else:
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_default,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    print(f"Finish drawing for {file_name}")
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w.json")[:500],
+#             "name": "adaptive simple physics",
+#         }
+#     ],
+#     "evolve_simple_2w",
+#     "evolve_simple_2w.png",
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next.json"),
+#             "name": "adaptive simple physics 2",
+#         }
+#     ],
+#     "evolve_simple_2w_next",
+#     "evolve_simple_2w_next.png",
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next.json"),
+#             "name": "adaptive simple physics 2",
+#             "color": 'gray',
+#             "alpha": 0.5,
+#             'style': 'dashed',
+#         },
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next_internals.json"),
+#             "name": "with internals",
+#         }
+#     ],
+#     "evolve_simple_2w_next_internals",
+#     "evolve_simple_2w_next_internals.png",
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next.json"),
+#             "name": "adaptive simple physics 2",
+#             "color": 'gray',
+#             "alpha": 0.5,
+#             'style': 'dashed',
+#         },
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next_value.json"),
+#             "name": "with simple physics value",
+#         }
+#     ],
+#     "evolve_simple_2w_next_value",
+#     "evolve_simple_2w_next_value.png",
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next.json"),
+#             "name": "adaptive simple physics 2",
+#             "color": 'gray',
+#             "alpha": 0.5,
+#             'style': 'dashed',
+#         },
+#         {
+#             "data": read_json_file("./evolve_simple_2w_next_both.json"),
+#             "name": "with both",
+#         }
+#     ],
+#     "evolve_simple_2w_next_both",
+#     "evolve_simple_2w_next_both.png",
+# )
+
+draw_graph(
+    [
+        {
+            "data": read_json_file("./evolve_simple_NEW.json"),
+            "name": "for loop to evolve simple",
+            "alpha": 0.5,
+            "color": colors[0],
+        },
+        {
+            "data": read_json_file("./evolve_simple_2w_NEW.json"),
+            "name": "insert simplicity into optimization",
+            "alpha": 0.5,
+            "color": colors[1],
+        },
+        {
+            "data": read_json_file("./simple_physics_0.0_2w_NEW.json"),
+            "name": "start from hard physics",
+            "alpha": 0.5,
+            "color": colors[2],
+        },
+    ],
+    "Different approaches to evolve to 0.0 simple value",
+    "_evolve_simple.png",
+    skip_individuals=True,
+    only_complex_track=True,
+    disable_percentiles=True,
+)
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_NEW.json"),
+#             "name": "for loop to evolve simple",
+#         },
+#     ],
+#     "evolve_simple_NEW",
+#     "evolve_simple_NEW_2.png",
+#     skip_individuals=True,
+# )
+
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./simple_physics_0.0_2w_evolve.json")[:500],
+#             "name": "adaptive simple physics",
+#         }
+#     ],
+#     "simple_physics_0.0_2w_evolve",
+#     "simple_physics_0.0_2w_evolve.png",
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_2w.json")[:500],
+#             "name": "adaptive simple physics",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#             "style": styles[0],
+#         },
+#         {
+#             "data": read_json_file("./simple_physics_0.0_2w_evolve.json")[:500],
+#             "name": "simple physics 0.0",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#             'style': styles[1],
+#         },
+#     ],
+#     "Adaptive vs static simple physics",
+#     "_adaptive_simple_physics.png",
+#     skip_individuals=True,
+# )
+
+# data_default = read_json_file("./default.json")
+# data_2w = read_json_file("./second_way.json")
+# for file_name in json_files:
+#     if file_name != "evolve_simple_2w.json":
+#         continue
+#     file_path = os.path.join('.', file_name)
+#     data = read_json_file(file_path)
+#     if file_name.endswith("_2w.json"):
+#         draw_graph(
+#             [
+#                 {
+#                     "data": data,
+#                     "name": "current",
+#                 },
+#                 {
+#                     "data": data_2w,
+#                     "name": "default",
+#                     "color": 'gray',
+#                     "alpha": 0.5,
+#                     'style': 'dashed',
+#                 }
+#             ],
+#             f'Graphs for {file_name}',
+#             f'{file_name}_graphs.png',
+#         )
+#     else:
+#         draw_graph(
+#             [
+#                 {
+#                     "data": data,
+#                     "name": "current",
+#                 },
+#                 {
+#                     "data": data_default,
+#                     "name": "default",
+#                     "color": 'gray',
+#                     "alpha": 0.5,
+#                     'style': 'dashed',
+#                 }
+#             ],
+#             f'Graphs for {file_name}',
+#             f'{file_name}_graphs.png',
+#         )
+#     print(f"Finish drawing for {file_name}")

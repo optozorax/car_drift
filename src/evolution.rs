@@ -65,6 +65,7 @@ pub struct NnParameters {
     pub pass_dirs: bool,
     pub pass_internals: bool,
     pub pass_prev_output: bool,
+    pub pass_simple_physics_value: bool,
     pub dirs_size: usize,
     pub pass_next_size: usize,
     pub hidden_layers: Vec<usize>,
@@ -103,6 +104,9 @@ pub struct SimulationParameters {
     pub eval_acquired: Clamped,     // ratio from 0 to 5000
     pub eval_penalty: Clamped,      // ratio from 0 to 5000
 
+    pub evolve_simple_physics: bool,
+    pub hard_physics_reward: Clamped,
+
     pub nn: NnParameters,
 }
 
@@ -130,6 +134,10 @@ impl NnParameters {
 
         ui.label("Pass prev output:");
         ui.checkbox(&mut self.pass_prev_output, "");
+        ui.end_row();
+
+        ui.label("Pass simple physics value:");
+        ui.checkbox(&mut self.pass_simple_physics_value, "");
         ui.end_row();
 
         ui.label("Dirs size:");
@@ -172,6 +180,7 @@ impl NnParameters {
             + self.pass_internals as usize * Self::CAR_INPUT_SIZE
             + self.pass_next_size
             + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
+            + self.pass_simple_physics_value as usize
     }
 
     pub fn get_nn_sizes(&self) -> Vec<usize> {
@@ -182,7 +191,7 @@ impl NnParameters {
     }
 
     pub fn get_nn_len(&self) -> usize {
-        NeuralNetwork::new(self.get_nn_sizes()).get_values().len()
+        NeuralNetwork::calc_nn_len(&self.get_nn_sizes())
     }
 }
 
@@ -883,20 +892,22 @@ pub struct NnProcessor {
     next_values: Vec<f32>,
     prev_output: Vec<f32>,
     nn: NeuralNetwork,
+    simple_physics: f32,
 }
 
 impl NnProcessor {
-    pub fn new(nn: NeuralNetwork, params: NnParameters) -> Self {
+    pub fn new(nn: NeuralNetwork, params: NnParameters, simple_physics: f32) -> Self {
         Self {
             input_values: vec![0.; params.get_total_input_neurons()],
             next_values: vec![0.; params.pass_next_size],
             prev_output: vec![0.; NnParameters::CAR_OUTPUT_SIZE],
             params,
             nn,
+            simple_physics,
         }
     }
 
-    pub fn new_from_nn_data(params: NnParameters) -> Self {
+    pub fn new_from_nn_data(params: NnParameters, simple_physics: f32) -> Self {
         let (sizes, values) = include!("nn.data");
         assert_eq!(params.get_nn_sizes(), sizes);
         let mut result = NeuralNetwork::new(sizes);
@@ -905,7 +916,7 @@ impl NnProcessor {
             .iter_mut()
             .zip(values.iter())
             .for_each(|(x, y)| *x = *y);
-        Self::new(result, params)
+        Self::new(result, params, simple_physics)
     }
 
     pub fn process(
@@ -959,7 +970,11 @@ impl NnProcessor {
             }
         }
 
-        debug_assert!(input_values_iter.next().is_none());
+        if self.params.pass_simple_physics_value {
+            *input_values_iter.next().unwrap() = self.simple_physics;
+        }
+
+        assert!(input_values_iter.next().is_none());
 
         let values = self.nn.calc(&self.input_values);
 
@@ -1126,6 +1141,8 @@ pub struct TrackEvaluation {
     distance_percent: f32,
     rewards_acquired_percent: f32,
     all_acquired: bool,
+    simple_physics: f32,
+    simple_physics_raw: f32,
 }
 
 impl std::fmt::Display for TrackEvaluation {
@@ -1152,7 +1169,20 @@ pub fn print_evals(evals: &[TrackEvaluation]) {
 
 pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f32 {
     if params.rewards_second_way {
+        let all_acquired = evals.iter().all(|x| x.all_acquired);
         let len = evals.len() as f32;
+        let hard_physics_reward = if all_acquired {
+            0.01 + (1.0 - evals[0].simple_physics)
+        } else {
+            evals[0].simple_physics - 1.
+        } * len;
+        let simple_physics_raw = evals[0].simple_physics_raw;
+        let raw_penalty_start = 5.;
+        let simple_physics_raw_penalty = if simple_physics_raw.abs() < raw_penalty_start {
+            1.
+        } else {
+            1. / (1. + (simple_physics_raw.abs() - raw_penalty_start))
+        };
         let tracks_sum = evals.iter().map(|x| x.all_acquired as usize as f32).sum::<f32>();
         let penalty_level_1 = evals.iter().map(|x| (x.penalty < 15.) as usize as f32).sum::<f32>();
         let penalty_level_2 = evals.iter().map(|x| (x.penalty < 5.) as usize as f32).sum::<f32>();
@@ -1161,11 +1191,15 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
         let penalty_levels_len = 4. * len;
         let penalty_levels = (penalty_level_1 + penalty_level_2 + penalty_level_3 + penalty_level_4) / penalty_levels_len;
         let smooth_metrics = evals.iter().map(|x| x.to_f32_second_way()).sum::<f32>();
-        if params.rewards_second_way_penalty {
-            tracks_sum + penalty_levels + smooth_metrics / penalty_levels_len
+        return tracks_sum + if params.rewards_second_way_penalty {
+            penalty_levels + smooth_metrics / penalty_levels_len
         } else {
-            tracks_sum + smooth_metrics / len
-        }
+            smooth_metrics / len
+        } + if params.evolve_simple_physics {
+            hard_physics_reward + simple_physics_raw_penalty
+        } else {
+            0.
+        };
     } else {
         evals
             .iter()
@@ -1179,6 +1213,8 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
                         distance_percent: 1.,
                         rewards_acquired_percent: 1.,
                         all_acquired: true,
+                        simple_physics: x.simple_physics,
+                        simple_physics_raw: 0.,
                     }
                     .to_f32(params)
                 } else {
@@ -1194,6 +1230,10 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
                     .reduce(|a, b| a.min(b))
                     .unwrap_or(0.)
                     * 10000.
+            } else {
+                0.
+            } + if params.evolve_simple_physics {
+                evals[0].simple_physics * params.hard_physics_reward.value
             } else {
                 0.
             }
@@ -1215,11 +1255,28 @@ impl TrackEvaluation {
     }
 }
 
+pub fn patch_params_sim(params: &[f32], params_sim: &SimulationParameters) -> SimulationParameters {
+    let nn_len = params_sim.nn.get_nn_len();
+    let (_, other_params) = params.split_at(nn_len);
+    assert_eq!(other_params.len(), OTHER_PARAMS_SIZE);
+    let mut params_sim = params_sim.clone();
+    if params_sim.evolve_simple_physics {
+        params_sim.simulation_simple_physics = sigmoid(other_params[0]);
+    }
+    params_sim
+}
+
 pub fn eval_nn(
-    nn: NeuralNetwork,
+    params: &[f32],
     params_phys: &PhysicsParameters,
     params_sim: &SimulationParameters,
 ) -> Vec<TrackEvaluation> {
+    let nn_len = params_sim.nn.get_nn_len();
+    let (nn_params, other_params) = params.split_at(nn_len);
+    assert_eq!(other_params.len(), OTHER_PARAMS_SIZE);
+    let nn = from_slice_to_nn(params_sim.nn.get_nn_sizes(), nn_params);
+
+    let params_sim = patch_params_sim(params, params_sim);
     let params_phys = params_sim.patch_physics_parameters(params_phys.clone());
 
     let mut result: Vec<TrackEvaluation> = Default::default();
@@ -1255,24 +1312,24 @@ pub fn eval_nn(
             let car = {
                 let result: Car = Default::default();
                 if i != 0 && params_sim.mutate_car_enable {
-                    mutate_car(result, params_sim)
+                    mutate_car(result, &params_sim)
                 } else {
                     result
                 }
             };
-            let mut nn_processor = NnProcessor::new(nn.clone(), params_sim.nn.clone());
+            let mut nn_processor = NnProcessor::new(nn.clone(), params_sim.nn.clone(), params_sim.simulation_simple_physics);
             let mut simulation =
-                CarSimulation::new(car, walls.clone(), rewards.clone(), params_sim);
+                CarSimulation::new(car, walls.clone(), rewards.clone(), &params_sim);
 
             let mut early_finish_percent = 0.;
             let steps_quota = params_sim.simulation_steps_quota;
             for i in 0..steps_quota {
                 if simulation.step(
                     &params_phys,
-                    params_sim,
+                    &params_sim,
                     &mut |_, _, _| (),
                     &mut |time, dist, dpenalty, dirs, internals| {
-                        nn_processor.process(time, dist, dpenalty, dirs, internals, params_sim)
+                        nn_processor.process(time, dist, dpenalty, dirs, internals, &params_sim)
                     },
                     &mut |_, _, _| (),
                     &mut |_| (),
@@ -1280,7 +1337,7 @@ pub fn eval_nn(
                     break;
                 }
 
-                if simulation.reward_path_processor.all_acquired(params_sim) {
+                if simulation.reward_path_processor.all_acquired(&params_sim) {
                     early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
                     break;
                 }
@@ -1298,8 +1355,10 @@ pub fn eval_nn(
                 distance_percent: simulation.reward_path_processor.distance_percent(),
                 rewards_acquired_percent: simulation
                     .reward_path_processor
-                    .rewards_acquired_percent(params_sim),
-                all_acquired: simulation.reward_path_processor.all_acquired(params_sim),
+                    .rewards_acquired_percent(&params_sim),
+                all_acquired: simulation.reward_path_processor.all_acquired(&params_sim),
+                simple_physics: params_sim.simulation_simple_physics,
+                simple_physics_raw: other_params[0],
             });
         }
     }
@@ -1315,28 +1374,18 @@ fn from_slice_to_nn(sizes: Vec<usize>, pos: &[f32]) -> NeuralNetwork {
     nn
 }
 
-fn from_slice_to_nn_f64(sizes: Vec<usize>, pos: &[f64]) -> NeuralNetwork {
-    let mut nn = NeuralNetwork::new(sizes);
-    nn.get_values_mut()
-        .iter_mut()
-        .zip(pos.iter())
-        .for_each(|(x, y)| *x = *y as f32);
-    nn
+fn from_f64_to_f32_vec(pos: &[f64]) -> Vec<f32> {
+    pos.iter().copied().map(|x| x as f32).collect()
 }
 
-fn from_dvector_to_nn(sizes: Vec<usize>, pos: &DVector<f64>) -> NeuralNetwork {
-    let mut nn = NeuralNetwork::new(sizes);
-    nn.get_values_mut()
-        .iter_mut()
-        .zip(pos.iter())
-        .for_each(|(x, y)| *x = *y as f32);
-    nn
+fn from_dvector_to_f32_vec(pos: &DVector<f64>) -> Vec<f32> {
+    pos.iter().copied().map(|x| x as f32).collect()
 }
 
 pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let params_phys = params_sim.patch_physics_parameters(PhysicsParameters::default());
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let nn_len = params_sim.nn.get_nn_len();
 
     let input_done: Vec<(f32, f32)> = if RUN_FROM_PREV_NN {
         include!("nn.data")
@@ -1353,7 +1402,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
     let now = Instant::now();
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(
-            from_slice_to_nn(nn_sizes.clone(), pos),
+            pos,
             &params_phys,
             params_sim,
         );
@@ -1368,7 +1417,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
             let (cost, vec) = de.best().unwrap();
             println!("cost: {}", cost);
             print_evals(&eval_nn(
-                from_slice_to_nn(nn_sizes.clone(), vec),
+                vec,
                 &params_phys,
                 params_sim,
             ));
@@ -1382,7 +1431,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
     let (cost, pos) = de.best().unwrap();
     println!("cost: {}", cost);
     print_evals(&eval_nn(
-        from_slice_to_nn(nn_sizes.clone(), pos),
+        pos,
         &params_phys,
         params_sim,
     ));
@@ -1396,21 +1445,21 @@ pub fn evolve_by_differential_evolution_custom(
     generations_count: usize,
 ) -> Vec<EvolveOutputEachStep> {
     let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
-    let input_done: Vec<(f32, f32)> = vec![(-10., 10.); nn_len];
+    let nn_len = params_sim.nn.get_nn_len();
+    let input_done: Vec<(f32, f32)> = vec![(-10., 10.); nn_len + OTHER_PARAMS_SIZE];
 
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(
-            from_slice_to_nn(nn_sizes.clone(), pos),
+            pos,
             &params_phys,
             params_sim,
         );
         -sum_evals(&evals, params_sim)
     });
 
-    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+    let mut true_params_sim = SimulationParameters::true_metric(&params_sim);
 
     for pos in 0..generations_count {
         let now = Instant::now();
@@ -1419,20 +1468,21 @@ pub fn evolve_by_differential_evolution_custom(
         }
         let (value, point) = de.best().unwrap();
 
-        let nn = from_slice_to_nn(nn_sizes.clone(), point);
+        true_params_sim = patch_params_sim(point, &true_params_sim);
+
         let evals = eval_nn(
-            nn.clone(),
+            point,
             params_phys,
             &params_sim,
         );
         let true_evals = eval_nn(
-            nn.clone(),
+            point,
             params_phys,
             &true_params_sim,
         );
 
         result.push(EvolveOutputEachStep {
-            nn: nn.get_values().iter().copied().collect(),
+            nn: point.iter().copied().collect(),
             evals_cost: sum_evals(&evals, params_sim),
             true_evals_cost: sum_evals(&true_evals, &true_params_sim),
             evals,
@@ -1446,7 +1496,7 @@ pub fn evolve_by_differential_evolution_custom(
 pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
     let mut params_sim = params_sim.clone();
     let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let nn_len = params_sim.nn.get_nn_len();
     let mut params_phys = params_sim.patch_physics_parameters(PhysicsParameters::default());
 
     let mut input_done: Vec<f64> = if RUN_FROM_PREV_NN {
@@ -1462,7 +1512,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
             .population_size(100)
             .build(|x: &DVector<f64>| -> f64 {
                 let evals = eval_nn(
-                    from_dvector_to_nn(nn_sizes.clone(), x),
+                    &from_dvector_to_f32_vec(&x),
                     &params_phys,
                     &params_sim,
                 );
@@ -1471,12 +1521,15 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
             .unwrap();
         let now = Instant::now();
         for pos in 0..500 {
-            // let _ = state.next();
-            let _ = state.next_parallel();
+            if ONE_THREADED {
+                let _ = state.next();
+            } else {
+                let _ = state.next_parallel();
+            }
             let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
             if pos == 0 {
                 print_evals(&eval_nn(
-                    from_dvector_to_nn(nn_sizes.clone(), point),
+                    &from_dvector_to_f32_vec(&point),
                     &params_phys,
                     &params_sim,
                 ));
@@ -1484,13 +1537,13 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
             println!("{pos}. {value}, {:?}", now.elapsed() / (pos + 1) as u32);
             if pos % 10 == 0 && pos != 0 {
                 print_evals(&eval_nn(
-                    from_dvector_to_nn(nn_sizes.clone(), point),
+                    &from_dvector_to_f32_vec(&point),
                     &params_phys,
                     &params_sim,
                 ));
             }
             if pos % 10 == 0 && pos != 0 {
-                println!("(vec!{:?}, vec!{:?})", nn_sizes, from_dvector_to_nn(nn_sizes.clone(), point).get_values());
+                println!("(vec!{:?}, vec!{:?})", nn_sizes, &from_dvector_to_f32_vec(&point));
             }
         }
         let solution = state.overall_best_individual().unwrap().point.clone();
@@ -1500,7 +1553,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         input_done = solution.iter().copied().collect();
         println!("(vec!{:?}, vec!{:?})", nn_sizes, solution.as_slice());
         let evals = eval_nn(
-            from_dvector_to_nn(nn_sizes.clone(), &solution),
+            &from_dvector_to_f32_vec(&&solution),
             &params_phys,
             &params_sim,
         );
@@ -1537,19 +1590,21 @@ pub fn evolve_by_cma_es_custom(
     nn_input: &[f32],
     population_size: usize,
     generations_count: usize,
+    step_size: Option<f64>,
+    stop_at: Option<f32>,
 ) -> Vec<EvolveOutputEachStep> {
     let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let nn_len = params_sim.nn.get_nn_len();
     let input_done: Vec<f64> = nn_input.iter().map(|x| *x as f64).collect();
-    assert_eq!(input_done.len(), nn_len);
+    assert_eq!(input_done.len(), nn_len + OTHER_PARAMS_SIZE);
 
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
-    let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
+    let mut state = cmaes::options::CMAESOptions::new(input_done, step_size.unwrap_or(10.))
         .population_size(population_size)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(
-                from_dvector_to_nn(nn_sizes.clone(), x),
+                &from_dvector_to_f32_vec(&x),
                 params_phys,
                 params_sim,
             );
@@ -1557,33 +1612,50 @@ pub fn evolve_by_cma_es_custom(
         })
         .unwrap();
 
-    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+    let mut true_params_sim = SimulationParameters::true_metric(params_sim);
 
     for pos in 0..generations_count {
         let now = Instant::now();
-        // let _ = state.next();
-        let _ = state.next_parallel();
+        if ONE_THREADED {
+            let _ = state.next();
+        } else {
+            let _ = state.next_parallel();
+        }
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
 
-        let nn = from_dvector_to_nn(nn_sizes.clone(), point);
+        let nn = from_dvector_to_f32_vec(&point);
+        true_params_sim = patch_params_sim(&nn, &true_params_sim);
+
         let evals = eval_nn(
-            nn.clone(),
+            &nn,
             params_phys,
             &params_sim,
         );
+        let evals_cost = sum_evals(&evals, params_sim);
         let true_evals = eval_nn(
-            nn.clone(),
+            &nn,
             params_phys,
             &true_params_sim,
         );
+        let true_evals_cost = sum_evals(&true_evals, &true_params_sim);
 
         result.push(EvolveOutputEachStep {
-            nn: nn.get_values().iter().copied().collect(),
-            evals_cost: sum_evals(&evals, params_sim),
-            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            nn: nn,
+            evals_cost,
+            true_evals_cost,
             evals,
             true_evals,
         });
+
+        if PRINT {
+            println!("{pos}. {evals_cost}");
+        }
+        if stop_at.map(|stop_at| evals_cost > stop_at).unwrap_or(false) {
+            if PRINT {
+                println!("Break, because current value {} is bigger than stop_at value {}", evals_cost, stop_at.unwrap());
+            }
+            break;
+        }
     }
 
     result
@@ -1676,7 +1748,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             let evals = eval_nn(
-                from_slice_to_nn_f64(self.params_sim.nn.get_nn_sizes(), &p.to_vec()),
+                &from_f64_to_f32_vec(&p.to_vec()),
                 &self.params_phys,
                 &self.params_sim,
             );
@@ -1690,7 +1762,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
         fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
             Ok(forward_diff_ndarray_f64(p, &|x| {
                 let evals = eval_nn(
-                    from_slice_to_nn_f64(self.params_sim.nn.get_nn_sizes(), &x.to_vec()),
+                    &from_f64_to_f32_vec(&x.to_vec()),
                     &self.params_phys,
                     &self.params_sim,
                 );
@@ -1780,7 +1852,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
     // let input_vec = nn_sizes.clone(), &res.state.best_param.clone().unwrap().to_vec();
 
     let evals = eval_nn(
-        from_slice_to_nn_f64(params_sim.nn.get_nn_sizes(), &input_vec.to_vec()),
+        &from_f64_to_f32_vec(&input_vec.to_vec()),
         &params_phys,
         params_sim,
     );
@@ -1795,7 +1867,10 @@ pub fn evolve_by_particle_swarm_custom(
     params_phys: &PhysicsParameters,
     population_size: usize,
     generations_count: usize,
+    best_start: Option<Vec<f32>>,
+    stop_at: Option<f32>,
 ) -> Vec<EvolveOutputEachStep> {
+    use argmin::solver::particleswarm::Particle;
     use argmin::solver::conjugategradient::beta::*;
     use argmin::solver::conjugategradient::*;
     use argmin::solver::gradientdescent::SteepestDescent;
@@ -1828,7 +1903,7 @@ pub fn evolve_by_particle_swarm_custom(
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             let evals = eval_nn(
-                from_slice_to_nn_f64(self.params_sim.nn.get_nn_sizes(), &p.to_vec()),
+                &from_f64_to_f32_vec(&p.to_vec()),
                 &self.params_phys,
                 &self.params_sim,
             );
@@ -1837,47 +1912,73 @@ pub fn evolve_by_particle_swarm_custom(
     }
 
     let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let nn_len = params_sim.nn.get_nn_len();
     let cost = NnStruct {
         params_sim: params_sim.clone(),
         params_phys: params_phys.clone(),
     };
 
-    let min_param: Array1<f64> = (0..nn_len).map(|_| -10.).collect();
-    let max_param: Array1<f64> = (0..nn_len).map(|_| 10.).collect();
+    let min_param: Array1<f64> = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| -1000.).collect();
+    let max_param: Array1<f64> = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| 1000.).collect();
     let mut solver = ParticleSwarm::new((min_param, max_param), population_size);
     let mut problem = Problem::new(cost);
     let mut state = PopulationState::new();
     state = solver.init(&mut problem, state).unwrap().0;
 
+    if let Some(best_start) = best_start {
+        let best_start = Array1::<f64>::from_iter(best_start.iter().map(|x| *x as f64));
+        let best_start_velocity = Array1::<f64>::from_iter((0..best_start.len()).map(|x| 0.1));
+        let best_start_cost = problem.cost(&best_start).unwrap();
+        if state.cost > best_start_cost {
+            state = state.individual(Particle::new(best_start, best_start_cost, best_start_velocity)).cost(best_start_cost);
+        } else {
+            println!("!!! Your provided solution have cost {}, when random solution have cost {}, it's not used.", best_start_cost, state.cost);
+        }
+    }
+    
+
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
-    let true_params_sim = SimulationParameters::true_metric(params_sim.simulation_simple_physics);
+    let mut true_params_sim = SimulationParameters::true_metric(&params_sim);
 
     for pos in 0..generations_count {
         let now = Instant::now();
         state = solver.next_iter(&mut problem, state).unwrap().0;
         let (point, value) = (&state.individual.as_ref().unwrap().position, state.cost);
+
+        let nn = from_f64_to_f32_vec(point.as_slice().unwrap());
+        true_params_sim = patch_params_sim(&nn, &true_params_sim);
         
-        let nn = from_slice_to_nn_f64(nn_sizes.clone(), point.as_slice().unwrap());
         let evals = eval_nn(
-            nn.clone(),
+            &nn,
             params_phys,
             &params_sim,
         );
+        let evals_cost = sum_evals(&evals, params_sim);
         let true_evals = eval_nn(
-            nn.clone(),
+            &nn,
             params_phys,
             &true_params_sim,
         );
+        let true_evals_cost = sum_evals(&true_evals, &true_params_sim);
 
         result.push(EvolveOutputEachStep {
-            nn: nn.get_values().iter().copied().collect(),
-            evals_cost: sum_evals(&evals, params_sim),
-            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            nn: nn,
+            evals_cost,
+            true_evals_cost,
             evals,
             true_evals,
         });
+
+        if PRINT {
+            println!("{pos}. {evals_cost}");
+        }
+        if stop_at.map(|stop_at| evals_cost > stop_at).unwrap_or(false) {
+            if PRINT {
+                println!("Break, because current value {} is bigger than stop_at value {}", evals_cost, stop_at.unwrap());
+            }
+            break;
+        }
     }
     result
 }
@@ -1893,7 +1994,7 @@ fn calc_gradient(params_sim: &SimulationParameters) {
     dbg!(forward_diff_vec(&input_done, &mut |x| {
         count += 1;
         let evals = eval_nn(
-            from_slice_to_nn(params_sim.nn.get_nn_sizes(), x),
+            x,
             &params_sim.patch_physics_parameters(PhysicsParameters::default()),
             params_sim,
         );
@@ -1920,6 +2021,7 @@ impl Default for NnParameters {
             pass_dirs: true,
             pass_internals: false,
             pass_prev_output: false,
+            pass_simple_physics_value: false,
             // dirs_size: 5,
             dirs_size: 21,
             pass_next_size: 0,
@@ -1984,26 +2086,29 @@ impl Default for SimulationParameters {
             eval_acquired: Clamped::new(1000., 0., 5000.),
             eval_penalty: Clamped::new(20., 0., 5000.),
 
+            evolve_simple_physics: false,
+            hard_physics_reward: Clamped::new(10000., 0., 10000.),
+
             nn: Default::default(),
         }
     }
 }
 
 impl SimulationParameters {
-    pub fn true_metric(simple_physics: f32) -> Self {
+    pub fn true_metric(other: &SimulationParameters) -> Self {
         let mut result = Self::default();
         result.enable_all_tracks();
         result.disable_track("straight_45"); // todo: удалить это и снова проверить
         result.rewards_second_way = true;
         result.mutate_car_enable = false;
         result.simulation_stop_penalty.value = 100.;
-        result.simulation_steps_quota = 3000;
-        result.simulation_simple_physics = simple_physics;
-        result.eval_reward.value = 1.;
-        result.eval_acquired.value = 1.;
-        result.eval_penalty.value = 1.;
 
-        // result.nn.hidden_layers = vec![6, 6];
+        result.simulation_simple_physics = other.simulation_simple_physics;
+        result.evolve_simple_physics = other.evolve_simple_physics;
+
+        result.nn = other.nn.clone();
+
+        // result.evolve_simple_physics = true;
 
         result
     }
@@ -2027,71 +2132,130 @@ impl SimulationParameters {
 }
 
 pub const RUN_EVOLUTION: bool = true;
-
 pub const RUN_FROM_PREV_NN: bool = false;
+const ONE_THREADED: bool = false;
+const PRINT: bool = true;
 
 const RUNS_COUNT: usize = 30;
 const POPULATION_SIZE: usize = 30;
-const GENERATIONS_COUNT: usize = 100;
+const GENERATIONS_COUNT: usize = 500;
+pub const OTHER_PARAMS_SIZE: usize = 1;
 
-// const RUNS_COUNT: usize = 3;
-// const POPULATION_SIZE: usize = 3;
-// const GENERATIONS_COUNT: usize = 3;
-
-fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
-    let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
-
-    let now = Instant::now();
-    let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
-        let mut rng = thread_rng();
-        let mut input = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        evolve_by_cma_es_custom(&params_sim, &params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT)
-    }).collect();
-
+fn save_runs(result: Vec<Vec<EvolveOutputEachStep>>, name: &str) {
     use std::io::Write;
     let filename = format!("graphs/{name}.json");
     let mut file = std::fs::File::create(&filename).unwrap();
     let json = serde_json::to_string(&result).unwrap();
     write!(file, "{}", json).unwrap();
+}
+
+fn evolve_simple_physics(
+    mut params_sim: SimulationParameters,
+    params_phys: &PhysicsParameters,
+    input: &[f32],
+    population_size: usize,
+    generations_count_main: usize,
+    generations_count_adapt: usize,
+) -> Vec<EvolveOutputEachStep> {
+    let step = 0.02;
+
+    params_sim.simulation_simple_physics = 0.98;
+    let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count_main, None, None);
+    let best_simple_cost = result.last().unwrap().evals_cost;
+    while params_sim.simulation_simple_physics > 0. {
+        params_sim.simulation_simple_physics -= step;
+        if params_sim.simulation_simple_physics < 0. {
+            params_sim.simulation_simple_physics = 0.;
+        }
+        if PRINT {
+            println!("Use simple physics value: {}", params_sim.simulation_simple_physics);
+        }
+        let evals = eval_nn(
+            &result.last().unwrap().nn,
+            params_phys,
+            &params_sim,
+        );
+        let evals_cost = sum_evals(&evals, &params_sim);
+        if evals_cost < best_simple_cost {
+            let result2 = evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count_adapt, None, Some(best_simple_cost));
+            result.extend(result2);
+        } else {
+            if PRINT {
+                println!("Skip evolution entirely.");
+            }
+        }
+    }
+    result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count_main, None, None));
+    if PRINT {
+        println!("FINISH!");
+    }
+    result
+}
+
+fn test_params_sim_evolve_simple(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
+    let nn_len = params_sim.nn.get_nn_len();
+
+    let now = Instant::now();
+    let map_lambda = |_| {
+        let mut rng = thread_rng();
+        let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
+        input[nn_len] = 1.0;
+        evolve_simple_physics(params_sim.clone(), params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT, 10)
+    };
+
+    let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
+        (0..RUNS_COUNT).into_iter().map(map_lambda).collect()
+    } else {
+        (0..RUNS_COUNT).into_par_iter().map(map_lambda).collect()
+    };
+
+    save_runs(result, name);
+
+    println!("For `{}`, time: {:?}", name, now.elapsed());
+}
+
+fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
+    let nn_len = params_sim.nn.get_nn_len();
+
+    let now = Instant::now();
+    let map_lambda = |_| {
+        let mut rng = thread_rng();
+        let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
+        input[nn_len] = 1.0;
+        evolve_by_cma_es_custom(&params_sim, &params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT, None, None)
+    };
+
+    let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
+        (0..RUNS_COUNT).into_iter().map(map_lambda).collect()
+    } else {
+        (0..RUNS_COUNT).into_par_iter().map(map_lambda).collect()
+    };
+
+    save_runs(result, name);
 
     println!("For `{}`, time: {:?}", name, now.elapsed());
 }
 
 fn test_params_sim_differential_evolution(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
-    let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
+    let nn_len = params_sim.nn.get_nn_len();
 
     let now = Instant::now();
     let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
-        let mut rng = thread_rng();
-        let mut input = (0..nn_len).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
         evolve_by_differential_evolution_custom(&params_sim, &params_phys, POPULATION_SIZE, GENERATIONS_COUNT)
     }).collect();
 
-    use std::io::Write;
-    let filename = format!("graphs/{name}.json");
-    let mut file = std::fs::File::create(&filename).unwrap();
-    let json = serde_json::to_string(&result).unwrap();
-    write!(file, "{}", json).unwrap();
+    save_runs(result, name);
 
     println!("For `{}`, time: {:?}", name, now.elapsed());
 }
 
 fn test_params_sim_particle_swarm(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
-    let nn_sizes = params_sim.nn.get_nn_sizes();
-    let nn_len = NeuralNetwork::new(nn_sizes.clone()).get_values().len();
-
     let now = Instant::now();
     let result: Vec<Vec<EvolveOutputEachStep>> = (0..RUNS_COUNT).into_par_iter().map(|_| {
-        evolve_by_particle_swarm_custom(&params_sim, &params_phys, POPULATION_SIZE, GENERATIONS_COUNT)
+        evolve_by_particle_swarm_custom(&params_sim, &params_phys, POPULATION_SIZE, GENERATIONS_COUNT, None, None)
     }).collect();
 
-    use std::io::Write;
-    let filename = format!("graphs/{name}.json");
-    let mut file = std::fs::File::create(&filename).unwrap();
-    let json = serde_json::to_string(&result).unwrap();
-    write!(file, "{}", json).unwrap();
+    save_runs(result, name);
 
     println!("For `{}`, time: {:?}", name, now.elapsed());
 }
@@ -2122,11 +2286,56 @@ pub fn evolution() {
 
     //------------------------------------------------------------------------
 
-    /*
-    params_sim.rewards_second_way = true;
-    test_params_sim(&params_sim, &params_phys, "second_way");
-    params_sim = params_sim_copy.clone();
+    // params_sim.rewards_second_way = true;
+    // test_params_sim(&params_sim, &params_phys, "second_way");
+    // params_sim = params_sim_copy.clone();
 
+    params_sim.rewards_second_way = true;
+    params_sim.rewards_second_way_penalty = true;
+    params_sim.evolve_simple_physics = false;
+    
+    params_sim.nn.pass_internals = true;
+    params_sim.nn.pass_simple_physics_value = false;
+    params_sim.nn.view_angle_ratio = 5. / 6.;
+    params_sim.simulation_stop_penalty.value = 20.;
+    params_sim.simulation_simple_physics = 0.0;
+
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "evolve_simple_NEW");
+
+    // params_sim.simulation_simple_physics = 0.0;
+    // test_params_sim(&params_sim, &params_phys, "simple_physics_0.0_2w_NEW");
+
+    params_sim.evolve_simple_physics = true;
+    test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_NEW_MUL");
+
+    // test_params_sim(&params_sim, &params_phys, "my2", Some(input_done), 1.0);
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.rewards_second_way = true;
+    // params_sim.evolve_simple_physics = true;
+    // params_sim.nn.pass_internals = true;
+    // test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_next_internals");
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.rewards_second_way = true;
+    // params_sim.evolve_simple_physics = true;
+    // params_sim.nn.pass_simple_physics_value = true;
+    // test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_next_value");
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.rewards_second_way = true;
+    // params_sim.evolve_simple_physics = true;
+    // params_sim.nn.pass_internals = true;
+    // params_sim.nn.pass_simple_physics_value = true;
+    // test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_next_both");
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.rewards_second_way = true;
+    // params_sim.simulation_simple_physics = 0.0;
+    // test_params_sim(&params_sim, &params_phys, "simple_physics_0.0_2w_evolve");
+    // params_sim = params_sim_copy.clone();
+
+    /*
     params_sim.rewards_add_each_acquire = false;
     test_params_sim(&params_sim, &params_phys, "no_add_each_acquire");
     params_sim = params_sim_copy.clone();
@@ -2314,11 +2523,11 @@ pub fn evolution() {
     params_sim = params_sim_copy.clone();
     */
 
-    params_sim.rewards_second_way = true;
-    params_sim_copy.rewards_second_way = true;
+    // params_sim.rewards_second_way = true;
+    // params_sim_copy.rewards_second_way = true;
 
-    test_params_sim_differential_evolution(&params_sim, &params_phys, "differential_evolution_2w");
-    test_params_sim_particle_swarm(&params_sim, &params_phys, "particle_swarm_2w");
+    // test_params_sim_differential_evolution(&params_sim, &params_phys, "differential_evolution_2w");
+    // test_params_sim_particle_swarm(&params_sim, &params_phys, "particle_swarm_2w");
 
     /*params_sim.mutate_car_enable = true;
     test_params_sim(&params_sim, &params_phys, "mutate_car_enabled_2w");

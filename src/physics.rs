@@ -300,9 +300,6 @@ impl Car {
             (1.5 * self.angle_acceleration - 0.5 * self.prev_angle_acceleration) * dt;
         self.angle += (1.5 * self.angle_speed - 0.5 * self.prev_angle_speed) * dt;
 
-        self.speed *= 1. - 0.01 * params.simple_physics_ratio;
-        self.angle_speed *= 1. - 0.01 * params.simple_physics_ratio;
-
         // regular euler
         // self.speed += self.acceleration * dt;
         // self.center += self.speed * dt;
@@ -349,19 +346,20 @@ impl Car {
 
     // we know for certain that point is inside
     pub fn apply_force(&mut self, pos: Pos2, dir: Vec2, params: &PhysicsParameters) {
+        let dir = dir * (1. - params.simple_physics_ratio);
         let r = pos - self.center;
         let torque = cross(r, dir);
         let dw_dt = torque / self.moment_of_inertia;
         let dx_dt = dir / self.mass;
         self.acceleration += dx_dt;
-        self.angle_acceleration += dw_dt * (1. - params.simple_physics_ratio);
+        self.angle_acceleration += dw_dt;
 
         self.forces.push((pos, dir));
     }
 
     #[inline(always)]
     pub fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
-        debug_assert!(self.cached_for_angle == self.angle);
+        debug_assert_eq!(self.cached_for_angle, self.angle);
         rotate_around_origin_optimized(
             (pos - self.center).to_pos2(),
             -self.cached_angle_sin,
@@ -372,7 +370,7 @@ impl Car {
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
     pub fn from_local_coordinates(&self, pos: Pos2) -> Pos2 {
-        debug_assert!(self.cached_for_angle == self.angle);
+        debug_assert_eq!(self.cached_for_angle, self.angle);
         rotate_around_origin_optimized(pos, self.cached_angle_sin, self.cached_angle_cos)
             + self.center.to_vec2()
     }
@@ -510,7 +508,7 @@ impl Car {
 
             self.apply_force(
                 self.wheel_pos(wheel),
-                total_force * (1. - params.simple_physics_ratio),
+                total_force,
                 params,
             );
         }
@@ -551,7 +549,7 @@ impl CarInput {
     pub const SIZE: usize = 6;
 
     pub fn from_f32(input: &[f32]) -> CarInput {
-        debug_assert!(input.len() == Self::SIZE);
+        debug_assert_eq!(input.len(), Self::SIZE);
         CarInput {
             brake: sqrt_sigmoid(input[0]).max(0.),
             acceleration: two_relus_to_ratio(input[1], input[2]),
@@ -577,24 +575,26 @@ impl Car {
         if input.brake > 0. {
             self.brake(input.brake, params);
         } else if input.acceleration > 0. {
-            self.move_forward(input.acceleration.abs() * (1. - params.simple_physics_ratio));
+            self.move_forward(input.acceleration.abs());
         } else if input.acceleration < 0. {
-            self.move_backwards(input.acceleration.abs() * (1. - params.simple_physics_ratio));
+            self.move_backwards(input.acceleration.abs());
         }
 
         if input.remove_turn > 0. {
             self.remove_turns(input.remove_turn, params);
         } else if input.turn > 0. {
             self.turn_left(
-                input.turn.abs() * (1. - params.simple_physics_ratio),
+                input.turn.abs(),
                 params,
             );
         } else if input.turn < 0. {
             self.turn_right(
-                input.turn.abs() * (1. - params.simple_physics_ratio),
+                input.turn.abs(),
                 params,
             );
         }
+
+        self.update_cache();
     }
 
     pub fn move_forward(&mut self, ratio: f32) {
@@ -612,7 +612,7 @@ impl Car {
     pub fn brake(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.up_wheels {
             self.wheels[*pos].action =
-                WheelAction::Braking((1. - params.simple_physics_ratio) * ratio);
+                WheelAction::Braking(ratio);
         }
     }
 
@@ -631,7 +631,7 @@ impl Car {
     pub fn remove_turns(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
             self.wheels[*pos].remove_turns =
-                params.wheel_turn_per_time * 5. * (1. - params.simple_physics_ratio) * ratio;
+                params.wheel_turn_per_time * 5. * ratio;
         }
     }
 
@@ -651,6 +651,7 @@ impl Car {
             if wall.is_inside(point) {
                 let outer_force = wall.outer_force(point);
                 self.apply_force(point, outer_force * params.wall_force, params);
+                self.center += outer_force * 10.0 * params.simple_physics_ratio;
                 if outer_force.length() > 1.7 {
                     self.speed *= 0.1;
                     self.angle_speed *= 0.1;
@@ -709,7 +710,7 @@ pub struct InternalCarValues {
 }
 
 impl InternalCarValues {
-    pub const SIZE: usize = 9;
+    pub const SIZE: usize = 10;
 
     pub fn speed_angle(&self) -> f32 {
         self.local_speed.y.atan2(self.local_speed.x)
@@ -729,7 +730,8 @@ impl InternalCarValues {
             self.local_acceleration.length(),
             self.angle_acceleration,
             self.angle_speed,
-            self.wheel_angle,
+            self.wheel_angle.sin(),
+            self.wheel_angle.cos(),
         ]
     }
 }

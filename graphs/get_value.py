@@ -33,12 +33,12 @@ def read_json_file(file_path):
 
 # ----------------------------------------------------------------------------
 
-data = read_json_file("second_way.json")
+data = read_json_file("my8.json")
 
-data = sorted(data, key=lambda x: x[-1]["true_evals_cost"])
+data = sorted(data, key=lambda x: x[-1]["evals_cost"])
 for i, run in enumerate(data):
-    if i % 10 == 0 or i == 99:
+    if i % 5 == 0 or i == 999 or i == 29:
         last = run[-1]
         print("---------------------------------", i)
         print("NN:", json.dumps(last["nn"]))
-        print("eval: ", last["true_evals_cost"])
+        print("eval: ", last["evals_cost"])

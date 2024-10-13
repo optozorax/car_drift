@@ -61,6 +61,9 @@ fn main_app() {
 }
 
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
+    color_backtrace::install();
+    
     if eframe_template::RUN_EVOLUTION {
         eframe_template::evolution();
     } else {

@@ -63,7 +63,7 @@ pub struct NeuralNetwork {
 
 impl NeuralNetwork {
     pub fn new(sizes: Vec<usize>) -> Self {
-        let values_size = pairs(sizes.iter()).map(|(a, b)| (a + 1) * b).sum();
+        let values_size = Self::calc_nn_len(&sizes);
         let mut result = Self {
             sizes,
             values: vec![0.; values_size],
@@ -72,6 +72,10 @@ impl NeuralNetwork {
         };
         result.resize_reserved();
         result
+    }
+
+    pub fn calc_nn_len(sizes: &[usize]) -> usize {
+        pairs(sizes.iter()).map(|(a, b)| (a + 1) * b).sum()
     }
 
     pub fn get_sizes(&self) -> &[usize] {

@@ -70,6 +70,8 @@ pub struct NnParameters {
     pub pass_next_size: usize,
     pub hidden_layers: Vec<usize>,
     pub inv_distance: bool,
+    pub inv_distance_coef: f32,
+    pub inv_distance_pow: f32,
     pub view_angle_ratio: f32,
 }
 
@@ -945,7 +947,7 @@ impl NnProcessor {
         if self.params.pass_dirs {
             for intersection in dirs {
                 *input_values_iter.next().unwrap() = if self.params.inv_distance {
-                    intersection.map(|x| 20. / (x + 1.).sqrt()).unwrap_or(0.)
+                    intersection.map(|x| self.params.inv_distance_coef / (x + 1.).powf(self.params.inv_distance_pow)).unwrap_or(0.)
                 } else {
                     intersection.map(|x| x.max(1000.)).unwrap_or(1000.)
                 };
@@ -1647,7 +1649,7 @@ pub fn evolve_by_cma_es_custom(
             true_evals,
         });
 
-        if PRINT {
+        if PRINT && pos % 10 == 0 {
             println!("{pos}. {evals_cost}");
         }
         if stop_at.map(|stop_at| evals_cost > stop_at).unwrap_or(false) {
@@ -2022,14 +2024,12 @@ impl Default for NnParameters {
             pass_internals: false,
             pass_prev_output: false,
             pass_simple_physics_value: false,
-            // dirs_size: 5,
             dirs_size: 21,
             pass_next_size: 0,
-            // pass_next_size: 3,
-            // hidden_layers: vec![6, 6],
-            // hidden_layers: vec![4, 4, 4, 4],
             hidden_layers: vec![6],
             inv_distance: true,
+            inv_distance_coef: 20.,
+            inv_distance_pow: 0.5,
             view_angle_ratio: 2. / 6.,
         }
     }
@@ -2138,7 +2138,7 @@ const PRINT: bool = true;
 
 const RUNS_COUNT: usize = 30;
 const POPULATION_SIZE: usize = 30;
-const GENERATIONS_COUNT: usize = 500;
+const GENERATIONS_COUNT: usize = 100;
 pub const OTHER_PARAMS_SIZE: usize = 1;
 
 fn save_runs(result: Vec<Vec<EvolveOutputEachStep>>, name: &str) {
@@ -2275,8 +2275,121 @@ pub fn evolution() {
     params_sim.simulation_stop_penalty.value = 100.;
     params_sim.simulation_simple_physics = 1.;
 
+    params_sim.rewards_second_way = true;
+    params_sim.rewards_second_way_penalty = true;
+    params_sim.evolve_simple_physics = false;
+    
+    params_sim.nn.pass_internals = true;
+    params_sim.nn.pass_simple_physics_value = false;
+    params_sim.nn.view_angle_ratio = 5. / 6.;
+    params_sim.simulation_stop_penalty.value = 20.;
+    params_sim.simulation_simple_physics = 0.0;
+
     let mut params_sim_copy = params_sim.clone();
     
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_default");
+
+    params_sim.nn.hidden_layers = vec![];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_no");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![10];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![20];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_20");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![6, 6];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_6_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![6, 6, 6, 6];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_6_6_6_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![10, 4, 3, 3, 3];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_10_4_3_3_3");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![20, 20];
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_hidden_20_20");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_internals = false;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_no_internals");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.view_angle_ratio = 1. / 6.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_view_1_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.view_angle_ratio = 2. / 6.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_view_2_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.view_angle_ratio = 3. / 6.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_view_3_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.view_angle_ratio = 4. / 6.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_view_4_6");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_time = true;
+    params_sim.nn.pass_distance = true;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_with_time_distance");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_prev_output = true;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_with_prev_output");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.dirs_size = 11;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_dirs_11");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.dirs_size = 7;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_dirs_7");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_next_size = 1;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_1");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_next_size = 3;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_3");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_next_size = 10;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance = false;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_no_inv_distance");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_coef = 10.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_coef = 30.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_30");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_pow = 0.25;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_pow_0_25");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_pow = 1.0;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_pow_1");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_pow = 2.0;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_pow_2");
+    params_sim = params_sim_copy.clone();
+
     // test_params_sim(&params_sim, &params_phys, "default");
 
     //------------------------------------------------------------------------
@@ -2290,23 +2403,13 @@ pub fn evolution() {
     // test_params_sim(&params_sim, &params_phys, "second_way");
     // params_sim = params_sim_copy.clone();
 
-    params_sim.rewards_second_way = true;
-    params_sim.rewards_second_way_penalty = true;
-    params_sim.evolve_simple_physics = false;
-    
-    params_sim.nn.pass_internals = true;
-    params_sim.nn.pass_simple_physics_value = false;
-    params_sim.nn.view_angle_ratio = 5. / 6.;
-    params_sim.simulation_stop_penalty.value = 20.;
-    params_sim.simulation_simple_physics = 0.0;
-
     // test_params_sim_evolve_simple(&params_sim, &params_phys, "evolve_simple_NEW");
 
     // params_sim.simulation_simple_physics = 0.0;
     // test_params_sim(&params_sim, &params_phys, "simple_physics_0.0_2w_NEW");
 
-    params_sim.evolve_simple_physics = true;
-    test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_NEW_MUL");
+    // params_sim.evolve_simple_physics = true;
+    // test_params_sim(&params_sim, &params_phys, "evolve_simple_2w_NEW_MUL");
 
     // test_params_sim(&params_sim, &params_phys, "my2", Some(input_done), 1.0);
     // params_sim = params_sim_copy.clone();

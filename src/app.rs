@@ -207,7 +207,7 @@ impl Default for TemplateApp {
 
             quota: 0,
 
-            nn_processor: NnProcessor::new(NeuralNetwork::new(NnParameters::default().get_nn_sizes()), Default::default(), 1.0),
+            nn_processor: NnProcessor::new_zeros(Default::default(), 1.0),
 
             simulation: CarSimulation::new(
                 Default::default(),
@@ -319,19 +319,13 @@ impl eframe::App for TemplateApp {
                             let nn_len = self.params_sim.nn.get_nn_len();
                             if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
                                 self.current_nn.clear();
-                                let mut nn = NeuralNetwork::new(nn_sizes);
-                                nn
-                                    .get_values_mut()
-                                    .iter_mut()
-                                    .zip(numbers.iter())
-                                    .for_each(|(x, y)| *x = *y);
                                 self.params_sim = patch_params_sim(&numbers, &self.params_sim);
                                 let true_params_sim = SimulationParameters::true_metric(&self.params_sim);
                                 let true_evals = eval_nn(&numbers, &self.params_phys, &true_params_sim);
                                 print_evals(&true_evals);
                                 println!("Cost: {}", sum_evals(&true_evals, &true_params_sim));
                                 println!("-----");
-                                self.nn_processor = NnProcessor::new(nn, self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics);
+                                self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics);
                                 self.reset_car();
                             } else {
                                 println!("Wrong size: expected {nn_len}, got: {}", numbers.len());

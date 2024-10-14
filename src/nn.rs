@@ -62,11 +62,24 @@ pub struct NeuralNetwork {
 }
 
 impl NeuralNetwork {
-    pub fn new(sizes: Vec<usize>) -> Self {
+    pub fn new_zeros(sizes: Vec<usize>) -> Self {
         let values_size = Self::calc_nn_len(&sizes);
         let mut result = Self {
             sizes,
             values: vec![0.; values_size],
+            reserved1: Default::default(),
+            reserved2: Default::default(),
+        };
+        result.resize_reserved();
+        result
+    }
+
+    pub fn new_params(sizes: Vec<usize>, params: &[f32]) -> Self {
+        let values_size = Self::calc_nn_len(&sizes);
+        assert_eq!(params.len(), values_size);
+        let mut result = Self {
+            sizes,
+            values: params.iter().copied().collect(),
             reserved1: Default::default(),
             reserved2: Default::default(),
         };
@@ -91,7 +104,7 @@ impl NeuralNetwork {
     }
 
     pub fn generate_random(sizes: Vec<usize>, rng: &mut impl Rng) -> Self {
-        let mut result = Self::new(sizes);
+        let mut result = Self::new_zeros(sizes);
         result
             .values
             .iter_mut()
@@ -496,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_neural_network_3_2_3() {
-        let mut nn = NeuralNetwork::new(vec![3, 2, 3]);
+        let mut nn = NeuralNetwork::new_zeros(vec![3, 2, 3]);
 
         // Set weights and biases manually
         nn.values = vec![
@@ -523,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_neural_network_2_2_1() {
-        let mut nn = NeuralNetwork::new(vec![2, 2, 1]);
+        let mut nn = NeuralNetwork::new_zeros(vec![2, 2, 1]);
 
         nn.values = vec![
             // First layer (2x2 matrix transposed + 2 biases)
@@ -546,7 +559,7 @@ mod tests {
 
     fn create_test_network() -> NeuralNetwork {
         let sizes = vec![3, 4, 2];
-        let mut nn = NeuralNetwork::new(sizes);
+        let mut nn = NeuralNetwork::new_zeros(sizes);
         nn.values = vec![
             // First layer (3x4 matrix + 4 biases)
             0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 0.01, 0.02, 0.03, 0.04,

@@ -89,6 +89,9 @@ def step_get_eval_value(step):
 def step_get_simple_physics(step):
     return step[info_field][0].get("simple_physics", 1.0)
 
+def step_get_autoencoder_loss(step):
+    return step[info_field][0].get("autoencoder_loss", 0.0)
+
 def step_get_true_eval_value(step):
     return step["true_evals_cost"]
 
@@ -190,7 +193,8 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
         axs[0, 1].set_title('Validation Loss - Individual Runs')
         axs[0, 1].set(xlabel='Epoch', ylabel='Loss')
 
-    if False:
+    if True:
+    # if False:
         for data in datas_with_style:
             draw_values_mean_std(axs[offset, 0], process_data(data["data"], step_get_eval_value), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
         axs[offset, 0].set_title('Training Loss - Mean + Std')
@@ -259,8 +263,14 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
     axs[offset+4, 0].set(xlabel='Epoch', ylabel='Percent')
     axs[offset+4, 0].legend()
 
+    for data in datas_with_style:
+        draw_values_mean_std(axs[offset+4, 1], process_data(data["data"], step_get_autoencoder_loss), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+    axs[offset+4, 1].set_title('Autoencoder loss average between tracks')
+    axs[offset+4, 1].set(xlabel='Epoch', ylabel='Loss')
+    axs[offset+4, 1].legend()
+
 def draw_graph(datas, title, filename, skip_individuals=False, only_complex_track=False, disable_percentiles=False):
-    lines = 4
+    lines = 5
     if skip_individuals:
         fig, axs = plt.subplots(lines, 2, figsize=(15, 5 * lines))
     else:
@@ -742,33 +752,33 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     "evolve_simple_2w_next_both.png",
 # )
 
-draw_graph(
-    [
-        {
-            "data": read_json_file("./evolve_simple_NEW.json"),
-            "name": "for loop to evolve simple",
-            "alpha": 0.5,
-            "color": colors[0],
-        },
-        {
-            "data": read_json_file("./evolve_simple_2w_NEW.json"),
-            "name": "insert simplicity into optimization",
-            "alpha": 0.5,
-            "color": colors[1],
-        },
-        {
-            "data": read_json_file("./simple_physics_0.0_2w_NEW.json"),
-            "name": "start from hard physics",
-            "alpha": 0.5,
-            "color": colors[2],
-        },
-    ],
-    "Different approaches to evolve to 0.0 simple value",
-    "_evolve_simple.png",
-    skip_individuals=True,
-    only_complex_track=True,
-    disable_percentiles=True,
-)
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evolve_simple_NEW.json"),
+#             "name": "for loop to evolve simple",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./evolve_simple_2w_NEW.json"),
+#             "name": "insert simplicity into optimization",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./simple_physics_0.0_2w_NEW.json"),
+#             "name": "start from hard physics",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#     ],
+#     "Different approaches to evolve to 0.0 simple value",
+#     "_evolve_simple.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
 
 # draw_graph(
 #     [
@@ -818,45 +828,46 @@ draw_graph(
 
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
-# for file_name in json_files:
-#     if file_name != "evolve_simple_2w.json":
-#         continue
-#     file_path = os.path.join('.', file_name)
-#     data = read_json_file(file_path)
-#     if file_name.endswith("_2w.json"):
-#         draw_graph(
-#             [
-#                 {
-#                     "data": data,
-#                     "name": "current",
-#                 },
-#                 {
-#                     "data": data_2w,
-#                     "name": "default",
-#                     "color": 'gray',
-#                     "alpha": 0.5,
-#                     'style': 'dashed',
-#                 }
-#             ],
-#             f'Graphs for {file_name}',
-#             f'{file_name}_graphs.png',
-#         )
-#     else:
-#         draw_graph(
-#             [
-#                 {
-#                     "data": data,
-#                     "name": "current",
-#                 },
-#                 {
-#                     "data": data_default,
-#                     "name": "default",
-#                     "color": 'gray',
-#                     "alpha": 0.5,
-#                     'style': 'dashed',
-#                 }
-#             ],
-#             f'Graphs for {file_name}',
-#             f'{file_name}_graphs.png',
-#         )
-#     print(f"Finish drawing for {file_name}")
+data_nn = read_json_file("./nn_default.json")
+for file_name in json_files:
+    # if file_name != "evolve_simple_2w.json":
+    #     continue
+    file_path = os.path.join('.', file_name)
+    data = read_json_file(file_path)
+    if file_name.startswith("nn_"):
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_nn,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
+    # else:
+        # draw_graph(
+        #     [
+        #         {
+        #             "data": data,
+        #             "name": "current",
+        #         },
+        #         {
+        #             "data": data_default,
+        #             "name": "default",
+        #             "color": 'gray',
+        #             "alpha": 0.5,
+        #             'style': 'dashed',
+        #         }
+        #     ],
+        #     f'Graphs for {file_name}',
+        #     f'{file_name}_graphs.png',
+        # )
+    print(f"Finish drawing for {file_name}")

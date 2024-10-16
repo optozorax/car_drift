@@ -223,15 +223,23 @@ impl NnParameters {
     }
 
     pub fn get_nns_len(&self) -> usize {
-        self.get_nn_len() + self.get_nn_autoencoder_input_len() + self.get_nn_autoencoder_output_len()
+        self.get_nn_len() + if self.use_dirs_autoencoder { self.get_nn_autoencoder_input_len() + self.get_nn_autoencoder_output_len() } else { 0 }
     }
 
     pub fn get_nn_autoencoder_input_len(&self) -> usize {
-        NeuralNetwork::calc_nn_len(&self.get_nn_autoencoder_input_sizes())
+        if self.use_dirs_autoencoder {
+            NeuralNetwork::calc_nn_len(&self.get_nn_autoencoder_input_sizes())
+        } else {
+            0
+        }
     }
 
     pub fn get_nn_autoencoder_output_len(&self) -> usize {
-        NeuralNetwork::calc_nn_len(&self.get_nn_autoencoder_output_sizes())
+        if self.use_dirs_autoencoder {
+            NeuralNetwork::calc_nn_len(&self.get_nn_autoencoder_output_sizes())
+        } else {
+            0
+        }
     }
 }
 
@@ -972,8 +980,8 @@ impl NnProcessor {
             autoencoder_output: vec![0.; nn_params.autoencoder_exits],
             params: nn_params.clone(),
             nn: NeuralNetwork::new_params(nn_params.get_nn_sizes(), params_nn),
-            nn_autoencoder_input: NeuralNetwork::new_params(nn_params.get_nn_autoencoder_input_sizes(), params_autoencoder_input),
-            nn_autoencoder_output: NeuralNetwork::new_params(nn_params.get_nn_autoencoder_output_sizes(), params_autoencoder_output),
+            nn_autoencoder_input: if nn_params.use_dirs_autoencoder { NeuralNetwork::new_params(nn_params.get_nn_autoencoder_input_sizes(), params_autoencoder_input)} else { NeuralNetwork::new_zeros(vec![1, 1]) },
+            nn_autoencoder_output: if nn_params.use_dirs_autoencoder { NeuralNetwork::new_params(nn_params.get_nn_autoencoder_output_sizes(), params_autoencoder_output) } else { NeuralNetwork::new_zeros(vec![1, 1]) },
             simple_physics,
             autoencoder_loss: 0.,
             autoencoder_counts: 0,
@@ -1026,7 +1034,7 @@ impl NnProcessor {
                 let values_output = self.nn_autoencoder_output.calc(values);
                 let mut sum = 0.;
                 for (intersection, prediction) in dirs.iter().zip(values_output.iter()) {
-                    sum += (Self::convert_dir(&self.params, *intersection) - prediction).abs();
+                    sum += 1. / (1. + (Self::convert_dir(&self.params, *intersection) - prediction).abs());
                 }
                 self.autoencoder_loss += sum / dirs.len() as f32;
                 self.autoencoder_counts += 1;
@@ -2226,9 +2234,9 @@ impl SimulationParameters {
 pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
-const PRINT: bool = true;
+const PRINT: bool = false;
 
-const RUNS_COUNT: usize = 30;
+const RUNS_COUNT: usize = 10;
 const POPULATION_SIZE: usize = 30;
 const GENERATIONS_COUNT: usize = 100;
 pub const OTHER_PARAMS_SIZE: usize = 1;
@@ -2250,6 +2258,8 @@ fn evolve_simple_physics(
     generations_count_adapt: usize,
 ) -> Vec<EvolveOutputEachStep> {
     let step = 0.02;
+
+    let start = Instant::now();
 
     params_sim.simulation_simple_physics = 0.98;
     let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count_main, None, None);
@@ -2278,21 +2288,27 @@ fn evolve_simple_physics(
         }
     }
     result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count_main, None, None));
-    if PRINT {
-        println!("FINISH!");
-    }
+    println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
     result
 }
 
 fn test_params_sim_evolve_simple(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
+    test_params_sim_fn(
+        params_sim, params_phys, name,
+        |params_sim, params_phys, input, population_size, generations_count| {
+            evolve_simple_physics(params_sim.clone(), params_phys, &input, population_size, generations_count, 10)
+        }
+    )
+}
+
+fn test_params_sim_fn<F: Fn(&SimulationParameters, &PhysicsParameters, &[f32], usize, usize) -> Vec<EvolveOutputEachStep> + std::marker::Sync>(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str, f: F) {
     let nn_len = params_sim.nn.get_nns_len();
 
     let now = Instant::now();
     let map_lambda = |_| {
         let mut rng = thread_rng();
         let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        input[nn_len] = 1.0;
-        evolve_simple_physics(params_sim.clone(), params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT, 10)
+        f(params_sim, params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT)
     };
 
     let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
@@ -2313,7 +2329,6 @@ fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParam
     let map_lambda = |_| {
         let mut rng = thread_rng();
         let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        input[nn_len] = 1.0;
         evolve_by_cma_es_custom(&params_sim, &params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT, None, None)
     };
 
@@ -2379,17 +2394,106 @@ pub fn evolution() {
 
     let mut params_sim_copy = params_sim.clone();
 
-    params_sim.nn.use_dirs_autoencoder = true;
-    params_sim.nn.autoencoder_exits = 5;
-    params_sim.nn.autoencoder_hidden_layers = vec![6];
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_autoencoder");
+    params_sim.nn.hidden_layers = vec![10];
+    test_params_sim_fn(
+        &params_sim, &params_phys, "nn_restart_layer",
+        |params_sim, params_phys, input, population_size, generations_count| {
+            let start = Instant::now();
+
+            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+
+            let nn_len = params_sim.nn.get_nn_len();
+            let nn_params = &result.last().unwrap().nn[..nn_len];
+            let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
+            let mut nn = nn.to_unoptimized();
+            nn.add_hidden_layer(1);
+            let nn = nn.to_optimized();
+
+            let mut params_sim = params_sim.clone();
+            params_sim.nn.hidden_layers = vec![10, 10];
+
+            let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
+            params.push(0.0);
+
+            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
+            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+            result
+        }
+    );
     params_sim = params_sim_copy.clone();
 
-    params_sim.nn.use_dirs_autoencoder = true;
-    params_sim.nn.autoencoder_exits = 5;
-    params_sim.nn.autoencoder_hidden_layers = vec![10, 8, 6];
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_autoencoder_deep");
+    params_sim.nn.hidden_layers = vec![10];
+    test_params_sim_fn(
+        &params_sim, &params_phys, "nn_restart_neuron",
+        |params_sim, params_phys, input, population_size, generations_count| {
+            let start = Instant::now();
+
+            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+
+            let nn_len = params_sim.nn.get_nn_len();
+            let nn_params = &result.last().unwrap().nn[..nn_len];
+            let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
+            let mut nn = nn.to_unoptimized();
+            nn.add_hidden_neuron(0);
+            let nn = nn.to_optimized();
+
+            let mut params_sim = params_sim.clone();
+            params_sim.nn.hidden_layers = vec![11];
+
+            let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
+            params.push(0.0);
+
+            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
+            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+            result
+        }
+    );
     params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![10];
+    test_params_sim_fn(
+        &params_sim, &params_phys, "nn_restart",
+        |params_sim, params_phys, input, population_size, generations_count| {
+            let start = Instant::now();
+
+            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count, None, None));
+            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+            result
+        }
+    );
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.view_angle_ratio = 3. / 6.;
+    params_sim.nn.hidden_layers = vec![10];
+    params_sim.nn.pass_next_size = 1;
+    params_sim.nn.inv_distance_coef = 30.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_best");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_coef = 40.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_40");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_coef = 80.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_80");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.inv_distance_coef = 160.;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_160");
+    params_sim = params_sim_copy.clone();
+
+    // params_sim.nn.use_dirs_autoencoder = true;
+    // params_sim.nn.autoencoder_exits = 5;
+    // params_sim.nn.autoencoder_hidden_layers = vec![6];
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_autoencoder");
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.nn.use_dirs_autoencoder = true;
+    // params_sim.nn.autoencoder_exits = 5;
+    // params_sim.nn.autoencoder_hidden_layers = vec![10, 8, 6];
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_autoencoder_deep");
+    // params_sim = params_sim_copy.clone();
     
     // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_default");
 
@@ -2458,17 +2562,17 @@ pub fn evolution() {
     // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_dirs_7");
     // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.pass_next_size = 1;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_1");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.pass_next_size = 1;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_1");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.pass_next_size = 3;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_3");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.pass_next_size = 3;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_3");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.pass_next_size = 10;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_10");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.pass_next_size = 10;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_next_10");
+    // params_sim = params_sim_copy.clone();
 
     // params_sim.nn.inv_distance = false;
     // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_no_inv_distance");

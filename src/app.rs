@@ -4,6 +4,7 @@ use crate::evolution::*;
 use crate::physics::*;
 use crate::storage::*;
 use egui::containers::Frame;
+use egui::*;
 use egui::pos2;
 use egui::vec2;
 use egui::Align2;
@@ -306,7 +307,9 @@ impl eframe::App for TemplateApp {
                         );
 
                         ui.label("NN weights json:");
-                        ui.text_edit_multiline(&mut self.current_nn);
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.text_edit_multiline(&mut self.current_nn);
+                        });
                         if ui.button("Set NN").clicked() {
                             let numbers: Vec<f32> = match serde_json::from_str(&self.current_nn) {
                                 Ok(ok) => ok,
@@ -337,9 +340,21 @@ impl eframe::App for TemplateApp {
                             self.simulation.car = mutate_car(Default::default(), &self.params_sim);
                         }
 
-                        self.params_sim.ui(ui);
-                        // self.params_phys.ui(ui);
-                        // self.params_intr.ui(ui);
+                        CollapsingHeader::new("Simulation parameters")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                self.params_sim.ui(ui);
+                            });
+                        CollapsingHeader::new("Physics parameters")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                self.params_phys.ui(ui);
+                            });
+                        CollapsingHeader::new("Interface parameters")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                self.params_intr.ui(ui);
+                            });
 
                         self.params_phys = self
                             .params_sim

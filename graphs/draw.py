@@ -829,12 +829,31 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
 data_nn = read_json_file("./nn_default.json")
+data_nn_restart = read_json_file("./nn_restart.json")
 for file_name in json_files:
     # if file_name != "evolve_simple_2w.json":
     #     continue
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)
-    if file_name.startswith("nn_"):
+    if file_name.startswith("nn_restart"):
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_nn_restart,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
+    elif file_name.startswith("nn_"):
         draw_graph(
             [
                 {

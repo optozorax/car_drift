@@ -2454,7 +2454,7 @@ pub fn evolution() {
     let mut params_sim_copy = params_sim.clone();
 
     params_sim.simulation_sample_mean = true;
-    test_params_sim(&params_sim, &params_phys, "nn_default_sm");
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_default_sm");
     params_sim = params_sim_copy.clone();
 
     params_sim.simulation_sample_mean = true;

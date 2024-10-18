@@ -742,7 +742,7 @@ dependencies = [
 [[package]]
 name = "cmaes"
 version = "0.2.1"
-source = "git+https://github.com/optozorax/cmaes#bd3849c9637812ec31d1e683a9a37e6bad0679b0"
+source = "git+https://github.com/optozorax/cmaes#fcdd95f75486e59dd83bf715610da83f8cd9d9d2"
 dependencies = [
  "nalgebra 0.30.1",
  "rand 0.8.5",

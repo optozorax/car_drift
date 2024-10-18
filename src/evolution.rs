@@ -101,6 +101,8 @@ pub struct SimulationParameters {
     pub simulation_simple_physics: f32,
     pub simulation_enable_random_nn_output: bool,
     pub simulation_random_output_range: f32,
+    pub simulation_use_output_regularization: bool,
+    pub simulation_sample_mean: bool,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -947,7 +949,10 @@ pub struct NnProcessor {
     simple_physics: f32,
 
     autoencoder_loss: f32,
-    autoencoder_counts: usize,
+    calc_counts: usize,
+
+    output_diff_loss: f32,
+    output_regularization_loss: f32,
 }
 
 impl NnProcessor {
@@ -964,7 +969,9 @@ impl NnProcessor {
             nn_autoencoder_output: NeuralNetwork::new_zeros(nn_params.get_nn_autoencoder_output_sizes()),
             simple_physics,
             autoencoder_loss: 0.,
-            autoencoder_counts: 0,
+            calc_counts: 0,
+            output_diff_loss: 0.,
+            output_regularization_loss: 0.,
         }
     }
 
@@ -984,7 +991,9 @@ impl NnProcessor {
             nn_autoencoder_output: if nn_params.use_dirs_autoencoder { NeuralNetwork::new_params(nn_params.get_nn_autoencoder_output_sizes(), params_autoencoder_output) } else { NeuralNetwork::new_zeros(vec![1, 1]) },
             simple_physics,
             autoencoder_loss: 0.,
-            autoencoder_counts: 0,
+            calc_counts: 0,
+            output_diff_loss: 0.,
+            output_regularization_loss: 0.,
         }
     }
 
@@ -1005,6 +1014,8 @@ impl NnProcessor {
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
     ) -> CarInput {
+        self.calc_counts += 1;
+
         let mut input_values_iter = self.input_values.iter_mut();
 
         if self.params.pass_time {
@@ -1037,7 +1048,6 @@ impl NnProcessor {
                     sum += 1. / (1. + (Self::convert_dir(&self.params, *intersection) - prediction).abs());
                 }
                 self.autoencoder_loss += sum / dirs.len() as f32;
-                self.autoencoder_counts += 1;
             } else {
                 for intersection in dirs {
                     *input_values_iter.next().unwrap() = Self::convert_dir(&self.params, *intersection);
@@ -1074,13 +1084,13 @@ impl NnProcessor {
 
         let mut output_values_iter = values.iter();
 
-        if self.params.pass_prev_output {
-            for y in &mut self.prev_output {
-                *y = *output_values_iter.next().unwrap();
-            }
-        } else {
-            for _ in 0..NnParameters::CAR_OUTPUT_SIZE {
-                output_values_iter.next().unwrap();
+        let prev_output_len = self.prev_output.len();
+        for y in &mut self.prev_output {
+            let new_value = *output_values_iter.next().unwrap();
+            self.output_diff_loss += (*y  - new_value).abs() / prev_output_len as f32;
+            *y = new_value;
+            if new_value.abs() > 10. {
+                self.output_regularization_loss += (new_value.abs() - 10.) / prev_output_len as f32;
             }
         }
 
@@ -1104,10 +1114,30 @@ impl NnProcessor {
     }
 
     pub fn get_autoencoder_loss(&self) -> f32 {
-        if self.autoencoder_counts == 0 {
+        if self.calc_counts == 0 {
             0.
         } else {
-            self.autoencoder_loss / self.autoencoder_counts as f32
+            self.autoencoder_loss / self.calc_counts as f32
+        }
+    }
+
+    pub fn get_regularization_loss(&self) -> f32 {
+        self.nn.get_regularization() + self.nn_autoencoder_input.get_regularization() + self.nn_autoencoder_output.get_regularization()
+    }
+
+    pub fn get_output_diff_loss(&self) -> f32 {
+        if self.calc_counts == 0 {
+            0.
+        } else {
+            self.output_diff_loss / self.calc_counts as f32
+        }
+    }
+
+    pub fn get_output_regularization_loss(&self) -> f32 {
+        if self.calc_counts == 0 {
+            0.
+        } else {
+            self.output_regularization_loss / self.calc_counts as f32
         }
     }
 }
@@ -1240,7 +1270,7 @@ impl CarSimulation {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrackEvaluation {
     name: String,
     penalty: f32,
@@ -1252,13 +1282,16 @@ pub struct TrackEvaluation {
     simple_physics: f32,
     simple_physics_raw: f32,
     autoencoder_loss: f32,
+    regularization_loss: f32,
+    output_diff_loss: f32,
+    output_regularization_loss: f32,
 }
 
 impl std::fmt::Display for TrackEvaluation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} | d {:>5.1}% | a {:>5.1}% | e {:>5.1}% | penalty {:>6.1} | reward {:>6.1} | ae {:>5.1} | {}",
+            "{} | d {:>5.1}% | a {:>5.1}% | e {:>5.1}% | penalty {:>6.1} | reward {:>6.1} | ae {:>5.1} | reg {:>5.1} | oud {:5.1} | orl {:5.1} | {}",
             if self.all_acquired { "✅" } else { "❌" },
             self.distance_percent * 100.,
             self.rewards_acquired_percent * 100.,
@@ -1266,6 +1299,9 @@ impl std::fmt::Display for TrackEvaluation {
             self.penalty,
             self.reward,
             self.autoencoder_loss,
+            self.regularization_loss,
+            self.output_diff_loss,
+            self.output_regularization_loss,
             self.name,
         )
     }
@@ -1294,6 +1330,8 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
             1. / (1. + (simple_physics_raw.abs() - raw_penalty_start))
         };
         let tracks_sum = evals.iter().map(|x| x.all_acquired as usize as f32).sum::<f32>();
+        // let regularization_sum = evals.iter().map(|x| x.regularization_loss).sum::<f32>();
+        let regularization_sum = evals.iter().map(|x| x.output_regularization_loss).sum::<f32>() / evals.len() as f32;
         let penalty_level_1 = evals.iter().map(|x| (x.penalty < 15.) as usize as f32).sum::<f32>();
         let penalty_level_2 = evals.iter().map(|x| (x.penalty < 5.) as usize as f32).sum::<f32>();
         let penalty_level_3 = evals.iter().map(|x| (x.penalty < 2.) as usize as f32).sum::<f32>();
@@ -1307,6 +1345,10 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
             smooth_metrics / len
         } + if params.evolve_simple_physics {
             hard_physics_reward + simple_physics_raw_penalty
+        } else {
+            0.
+        } + if params.simulation_use_output_regularization {
+            1. / (1. + regularization_sum.sqrt().sqrt())
         } else {
             0.
         };
@@ -1326,6 +1368,9 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
                         simple_physics: x.simple_physics,
                         simple_physics_raw: 0.,
                         autoencoder_loss: 0.,
+                        regularization_loss: 0.,
+                        output_diff_loss: 0.,
+                        output_regularization_loss: 0.,
                     }
                     .to_f32(params)
                 } else {
@@ -1470,6 +1515,9 @@ pub fn eval_nn(
                 simple_physics: params_sim.simulation_simple_physics,
                 simple_physics_raw: other_params[0],
                 autoencoder_loss: nn_processor.get_autoencoder_loss(),
+                regularization_loss: nn_processor.get_regularization_loss(),
+                output_diff_loss: nn_processor.get_output_diff_loss(),
+                output_regularization_loss: nn_processor.get_output_regularization_loss(),
             });
         }
     }
@@ -1612,6 +1660,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
     // while params_sim.simulation_simple_physics >= 0. {
         let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
             .population_size(100)
+            .sample_mean(params_sim.simulation_sample_mean)
             .build(|x: &DVector<f64>| -> f64 {
                 let evals = eval_nn(
                     &from_dvector_to_f32_vec(&x),
@@ -1704,6 +1753,7 @@ pub fn evolve_by_cma_es_custom(
 
     let mut state = cmaes::options::CMAESOptions::new(input_done, step_size.unwrap_or(10.))
         .population_size(population_size)
+        .sample_mean(params_sim.simulation_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(
                 &from_dvector_to_f32_vec(&x),
@@ -1745,12 +1795,17 @@ pub fn evolve_by_cma_es_custom(
             nn: nn,
             evals_cost,
             true_evals_cost,
-            evals,
+            evals: evals.clone(),
             true_evals,
         });
 
-        if PRINT && pos % 10 == 0 {
+        if PRINT && ((pos % 10 == 0) ^ !PRINT_EVERY_10) {
             println!("{pos}. {evals_cost}");
+            if PRINT_EVALS {
+                for i in &evals {
+                    println!("{}", i);
+                }
+            }
         }
         if stop_at.map(|stop_at| evals_cost > stop_at).unwrap_or(false) {
             if PRINT {
@@ -2177,6 +2232,8 @@ impl Default for SimulationParameters {
             simulation_simple_physics: 0.0,
             simulation_enable_random_nn_output: false,
             simulation_random_output_range: 0.1,
+            simulation_use_output_regularization: false,
+            simulation_sample_mean: false,
 
             eval_skip_passed_tracks: false,
             eval_add_min_distance: false,
@@ -2235,8 +2292,10 @@ pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
 const PRINT: bool = false;
+const PRINT_EVERY_10: bool = true;
+const PRINT_EVALS: bool = false;
 
-const RUNS_COUNT: usize = 10;
+const RUNS_COUNT: usize = 30;
 const POPULATION_SIZE: usize = 30;
 const GENERATIONS_COUNT: usize = 100;
 pub const OTHER_PARAMS_SIZE: usize = 1;
@@ -2394,9 +2453,14 @@ pub fn evolution() {
 
     let mut params_sim_copy = params_sim.clone();
 
+    params_sim.simulation_sample_mean = true;
+    test_params_sim(&params_sim, &params_phys, "nn_default_sm");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.simulation_sample_mean = true;
     params_sim.nn.hidden_layers = vec![10];
     test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart_layer",
+        &params_sim, &params_phys, "nn_restart_layer_sm",
         |params_sim, params_phys, input, population_size, generations_count| {
             let start = Instant::now();
 
@@ -2422,9 +2486,10 @@ pub fn evolution() {
     );
     params_sim = params_sim_copy.clone();
 
+    params_sim.simulation_sample_mean = true;
     params_sim.nn.hidden_layers = vec![10];
     test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart_neuron",
+        &params_sim, &params_phys, "nn_restart_neuron_sm",
         |params_sim, params_phys, input, population_size, generations_count| {
             let start = Instant::now();
 
@@ -2450,9 +2515,10 @@ pub fn evolution() {
     );
     params_sim = params_sim_copy.clone();
 
+    params_sim.simulation_sample_mean = true;
     params_sim.nn.hidden_layers = vec![10];
     test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart",
+        &params_sim, &params_phys, "nn_restart_sm",
         |params_sim, params_phys, input, population_size, generations_count| {
             let start = Instant::now();
 
@@ -2464,24 +2530,24 @@ pub fn evolution() {
     );
     params_sim = params_sim_copy.clone();
 
-    params_sim.nn.view_angle_ratio = 3. / 6.;
-    params_sim.nn.hidden_layers = vec![10];
-    params_sim.nn.pass_next_size = 1;
-    params_sim.nn.inv_distance_coef = 30.;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_best");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.view_angle_ratio = 3. / 6.;
+    // params_sim.nn.hidden_layers = vec![10];
+    // params_sim.nn.pass_next_size = 1;
+    // params_sim.nn.inv_distance_coef = 30.;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_best");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.inv_distance_coef = 40.;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_40");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.inv_distance_coef = 40.;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_40");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.inv_distance_coef = 80.;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_80");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.inv_distance_coef = 80.;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_80");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.nn.inv_distance_coef = 160.;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_160");
-    params_sim = params_sim_copy.clone();
+    // params_sim.nn.inv_distance_coef = 160.;
+    // test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_inv_distance_coef_160");
+    // params_sim = params_sim_copy.clone();
 
     // params_sim.nn.use_dirs_autoencoder = true;
     // params_sim.nn.autoencoder_exits = 5;

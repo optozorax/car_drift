@@ -59,6 +59,9 @@ pub struct NeuralNetwork {
 
     reserved1: Vec<f32>,
     reserved2: Vec<f32>,
+
+    regularization: f32,
+    calc_count: usize,
 }
 
 impl NeuralNetwork {
@@ -69,6 +72,8 @@ impl NeuralNetwork {
             values: vec![0.; values_size],
             reserved1: Default::default(),
             reserved2: Default::default(),
+            regularization: 0.,
+            calc_count: 0,
         };
         result.resize_reserved();
         result
@@ -82,6 +87,8 @@ impl NeuralNetwork {
             values: params.iter().copied().collect(),
             reserved1: Default::default(),
             reserved2: Default::default(),
+            regularization: 0.,
+            calc_count: 0,
         };
         result.resize_reserved();
         result
@@ -122,6 +129,8 @@ impl NeuralNetwork {
     }
 
     pub fn calc<'a>(&'a mut self, input: &[f32]) -> &'a [f32] {
+        let mut regularization = 0.;
+        let mut values_count = 0;
         input
             .iter()
             .enumerate()
@@ -143,16 +152,34 @@ impl NeuralNetwork {
                 &self.values[offset..(offset + now)],
                 &mut self.reserved2[..*now],
             );
+
+            for value in &self.reserved2[..*now] {
+                if value.abs() > 10. {
+                    regularization += value.abs();
+                    values_count += 1;
+                }
+            }
             activation_vector(&mut self.reserved2[..*now]);
             offset += now;
             std::mem::swap(&mut self.reserved1, &mut self.reserved2);
         }
+
+        self.regularization += regularization / values_count as f32;
+        self.calc_count += 1;
 
         &self.reserved1[..*self.sizes.last().unwrap()]
     }
 
     pub fn mutate_float_value(&mut self, rng: &mut impl Rng) {
         *self.values.choose_mut(rng).unwrap() += rng.gen_range(-0.1..0.1);
+    }
+
+    pub fn get_regularization(&self) -> f32 {
+        if self.calc_count == 0 {
+            0.
+        } else {
+            self.regularization / self.calc_count as f32
+        }
     }
 }
 
@@ -236,6 +263,8 @@ impl NeuralNetwork {
             values,
             reserved1: Default::default(),
             reserved2: Default::default(),
+            regularization: 0.,
+            calc_count: 0,
         };
         nn.resize_reserved();
         nn

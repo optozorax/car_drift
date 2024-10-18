@@ -742,8 +742,7 @@ dependencies = [
 [[package]]
 name = "cmaes"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f91fa3ec9474ec2b2c51417ad28b1e05e608a7d724abdbc4062db80c40686f50"
+source = "git+https://github.com/optozorax/cmaes#bd3849c9637812ec31d1e683a9a37e6bad0679b0"
 dependencies = [
  "nalgebra 0.30.1",
  "rand 0.8.5",

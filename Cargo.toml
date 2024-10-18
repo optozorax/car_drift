@@ -23,7 +23,8 @@ rand = "0.8.5"
 getrandom = {version = "0.2.15", features = ["js"] }
 differential-evolution = "0.2.2"
 spiril = { git = "https://github.com/Jeffail/spiril" }
-cmaes = { version = "0.2.1", features = [], default-features = false }
+# cmaes = { version = "0.2.1", features = [], default-features = false }
+cmaes = { git = "https://github.com/optozorax/cmaes", features = [], default-features = false }
 argmin = "0.10.0"
 argmin-math = { version = "0.4.0", features = ["ndarray_v0_15-nolinalg"] }
 finitediff = { version = "0.1.4", features = ["ndarray"] }

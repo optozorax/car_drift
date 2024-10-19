@@ -33,12 +33,12 @@ def read_json_file(file_path):
 
 # ----------------------------------------------------------------------------
 
-data = read_json_file("simple_test_all_physics.json")
+data = read_json_file("simple_test_all_physics_9.json")
 
 # data = sorted(data, key=lambda x: x[80]["evals_cost"])
 for i, run in enumerate(data):
     if i % 100 == 0 or i == 999 or i == 29:
-        last = run[999]
+        last = run[-1]
         print("---------------------------------", i)
         print("NN:", json.dumps(last["nn"]))
         print("eval: ", last["evals_cost"])

@@ -102,7 +102,12 @@ pub struct SimulationParameters {
     pub simulation_enable_random_nn_output: bool,
     pub simulation_random_output_range: f32,
     pub simulation_use_output_regularization: bool,
-    pub simulation_sample_mean: bool,
+
+    pub evolution_sample_mean: bool,
+    pub evolution_generation_count: usize,
+    pub evolution_population_size: usize,
+    pub evolution_learning_rate: f64,
+    pub evolution_distance_to_solution: f64,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -1660,7 +1665,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
     // while params_sim.simulation_simple_physics >= 0. {
         let mut state = cmaes::options::CMAESOptions::new(input_done, 10.0)
             .population_size(100)
-            .sample_mean(params_sim.simulation_sample_mean)
+            .sample_mean(params_sim.evolution_sample_mean)
             .build(|x: &DVector<f64>| -> f64 {
                 let evals = eval_nn(
                     &from_dvector_to_f32_vec(&x),
@@ -1753,7 +1758,8 @@ pub fn evolve_by_cma_es_custom(
 
     let mut state = cmaes::options::CMAESOptions::new(input_done, step_size.unwrap_or(10.))
         .population_size(population_size)
-        .sample_mean(params_sim.simulation_sample_mean)
+        .cm(params_sim.evolution_learning_rate)
+        .sample_mean(params_sim.evolution_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(
                 &from_dvector_to_f32_vec(&x),
@@ -2233,7 +2239,12 @@ impl Default for SimulationParameters {
             simulation_enable_random_nn_output: false,
             simulation_random_output_range: 0.1,
             simulation_use_output_regularization: false,
-            simulation_sample_mean: false,
+
+            evolution_sample_mean: false,
+            evolution_generation_count: 100,
+            evolution_population_size: 30,
+            evolution_learning_rate: 1.0,
+            evolution_distance_to_solution: 10.,
 
             eval_skip_passed_tracks: false,
             eval_add_min_distance: false,
@@ -2291,7 +2302,7 @@ impl SimulationParameters {
 pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
-const PRINT: bool = false;
+const PRINT: bool = true;
 const PRINT_EVERY_10: bool = true;
 const PRINT_EVALS: bool = false;
 
@@ -2388,7 +2399,7 @@ fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParam
     let map_lambda = |_| {
         let mut rng = thread_rng();
         let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
-        evolve_by_cma_es_custom(&params_sim, &params_phys, &input, POPULATION_SIZE, GENERATIONS_COUNT, None, None)
+        evolve_by_cma_es_custom(&params_sim, &params_phys, &input, params_sim.evolution_population_size, params_sim.evolution_generation_count, Some(params_sim.evolution_distance_to_solution), None)
     };
 
     let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
@@ -2451,84 +2462,119 @@ pub fn evolution() {
     params_sim.simulation_stop_penalty.value = 20.;
     params_sim.simulation_simple_physics = 0.0;
 
+    params_sim.evolution_generation_count = 200;
+
     let mut params_sim_copy = params_sim.clone();
 
-    params_sim.simulation_sample_mean = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn_default_sm");
+    test_params_sim(&params_sim, &params_phys, "evo_default_pop_30_rate_1_dist_10");
     params_sim = params_sim_copy.clone();
 
-    params_sim.simulation_sample_mean = true;
-    params_sim.nn.hidden_layers = vec![10];
-    test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart_layer_sm",
-        |params_sim, params_phys, input, population_size, generations_count| {
-            let start = Instant::now();
-
-            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
-
-            let nn_len = params_sim.nn.get_nn_len();
-            let nn_params = &result.last().unwrap().nn[..nn_len];
-            let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
-            let mut nn = nn.to_unoptimized();
-            nn.add_hidden_layer(1);
-            let nn = nn.to_optimized();
-
-            let mut params_sim = params_sim.clone();
-            params_sim.nn.hidden_layers = vec![10, 10];
-
-            let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
-            params.push(0.0);
-
-            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
-            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
-            result
-        }
-    );
+    params_sim.evolution_population_size = 15;
+    test_params_sim(&params_sim, &params_phys, "evo_population_10");
     params_sim = params_sim_copy.clone();
 
-    params_sim.simulation_sample_mean = true;
-    params_sim.nn.hidden_layers = vec![10];
-    test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart_neuron_sm",
-        |params_sim, params_phys, input, population_size, generations_count| {
-            let start = Instant::now();
-
-            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
-
-            let nn_len = params_sim.nn.get_nn_len();
-            let nn_params = &result.last().unwrap().nn[..nn_len];
-            let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
-            let mut nn = nn.to_unoptimized();
-            nn.add_hidden_neuron(0);
-            let nn = nn.to_optimized();
-
-            let mut params_sim = params_sim.clone();
-            params_sim.nn.hidden_layers = vec![11];
-
-            let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
-            params.push(0.0);
-
-            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
-            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
-            result
-        }
-    );
+    params_sim.evolution_population_size = 60;
+    test_params_sim(&params_sim, &params_phys, "evo_population_60");
     params_sim = params_sim_copy.clone();
 
-    params_sim.simulation_sample_mean = true;
-    params_sim.nn.hidden_layers = vec![10];
-    test_params_sim_fn(
-        &params_sim, &params_phys, "nn_restart_sm",
-        |params_sim, params_phys, input, population_size, generations_count| {
-            let start = Instant::now();
-
-            let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
-            result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count, None, None));
-            println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
-            result
-        }
-    );
+    params_sim.evolution_population_size = 100;
+    test_params_sim(&params_sim, &params_phys, "evo_population_100");
     params_sim = params_sim_copy.clone();
+
+    params_sim.evolution_learning_rate = 0.8;
+    test_params_sim(&params_sim, &params_phys, "evo_rate_0_8");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.evolution_learning_rate = 0.5;
+    test_params_sim(&params_sim, &params_phys, "evo_rate_0_5");
+
+    params_sim.evolution_learning_rate = 0.3;
+    test_params_sim(&params_sim, &params_phys, "evo_rate_0_3");
+
+    params_sim.evolution_distance_to_solution = 1.;
+    test_params_sim(&params_sim, &params_phys, "evo_dist_1");
+
+    params_sim.evolution_distance_to_solution = 5.;
+    test_params_sim(&params_sim, &params_phys, "evo_dist_5");
+
+    params_sim.evolution_distance_to_solution = 15.;
+    test_params_sim(&params_sim, &params_phys, "evo_dist_15");
+
+    params_sim.evolution_distance_to_solution = 20.;
+    test_params_sim(&params_sim, &params_phys, "evo_dist_20");
+
+    // params_sim.evolution_sample_mean = true;
+    // params_sim.nn.hidden_layers = vec![10];
+    // test_params_sim_fn(
+    //     &params_sim, &params_phys, "nn_restart_layer_sm",
+    //     |params_sim, params_phys, input, population_size, generations_count| {
+    //         let start = Instant::now();
+
+    //         let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+
+    //         let nn_len = params_sim.nn.get_nn_len();
+    //         let nn_params = &result.last().unwrap().nn[..nn_len];
+    //         let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
+    //         let mut nn = nn.to_unoptimized();
+    //         nn.add_hidden_layer(1);
+    //         let nn = nn.to_optimized();
+
+    //         let mut params_sim = params_sim.clone();
+    //         params_sim.nn.hidden_layers = vec![10, 10];
+
+    //         let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
+    //         params.push(0.0);
+
+    //         result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
+    //         println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+    //         result
+    //     }
+    // );
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.evolution_sample_mean = true;
+    // params_sim.nn.hidden_layers = vec![10];
+    // test_params_sim_fn(
+    //     &params_sim, &params_phys, "nn_restart_neuron_sm",
+    //     |params_sim, params_phys, input, population_size, generations_count| {
+    //         let start = Instant::now();
+
+    //         let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+
+    //         let nn_len = params_sim.nn.get_nn_len();
+    //         let nn_params = &result.last().unwrap().nn[..nn_len];
+    //         let nn = NeuralNetwork::new_params(params_sim.nn.get_nn_sizes(), nn_params);
+    //         let mut nn = nn.to_unoptimized();
+    //         nn.add_hidden_neuron(0);
+    //         let nn = nn.to_optimized();
+
+    //         let mut params_sim = params_sim.clone();
+    //         params_sim.nn.hidden_layers = vec![11];
+
+    //         let mut params = nn.get_values().iter().copied().collect::<Vec<_>>();
+    //         params.push(0.0);
+
+    //         result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &params, population_size, generations_count, None, None));
+    //         println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+    //         result
+    //     }
+    // );
+    // params_sim = params_sim_copy.clone();
+
+    // params_sim.evolution_sample_mean = true;
+    // params_sim.nn.hidden_layers = vec![10];
+    // test_params_sim_fn(
+    //     &params_sim, &params_phys, "nn_restart_sm",
+    //     |params_sim, params_phys, input, population_size, generations_count| {
+    //         let start = Instant::now();
+
+    //         let mut result = evolve_by_cma_es_custom(&params_sim, &params_phys, &input, population_size, generations_count, None, None);
+    //         result.extend(evolve_by_cma_es_custom(&params_sim, &params_phys, &result.last().unwrap().nn, population_size, generations_count, None, None));
+    //         println!("FINISH! Time: {:?}, score: {}", start.elapsed(), result.last().unwrap().evals_cost);
+    //         result
+    //     }
+    // );
+    // params_sim = params_sim_copy.clone();
 
     // params_sim.nn.view_angle_ratio = 3. / 6.;
     // params_sim.nn.hidden_layers = vec![10];

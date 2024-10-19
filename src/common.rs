@@ -102,6 +102,7 @@ pub struct InterfaceParameters {
     pub view_size: f32,
     pub graph_points_size_limit: usize,
     pub show_dirs: bool,
+    pub simulations_per_frame: usize,
 }
 
 impl Default for InterfaceParameters {
@@ -114,6 +115,7 @@ impl Default for InterfaceParameters {
             view_size: 1500.,
             graph_points_size_limit: 1000,
             show_dirs: false,
+            simulations_per_frame: 1,
         }
     }
 }
@@ -164,6 +166,13 @@ impl InterfaceParameters {
 
         ui.label("Show dirs:");
         ui.checkbox(&mut self.show_dirs, "");
+        ui.end_row();
+
+        ui.label("Simulations per frame:");
+        ui.add(
+            Slider::new(&mut self.simulations_per_frame, 1..=10)
+                .clamp_to_range(true)
+        );
         ui.end_row();
     }
 

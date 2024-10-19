@@ -572,6 +572,8 @@ impl Car {
             self.angle -= 0.02 * input.turn * params.simple_physics_ratio;
         }
 
+        self.remove_turns(params.simple_physics_ratio.powf(4.0), params);
+
         if input.brake > 0. {
             self.brake(input.brake, params);
         } else if input.acceleration > 0. {

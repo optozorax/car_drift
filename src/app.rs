@@ -164,6 +164,7 @@ pub struct TemplateApp {
     all_tracks: Vec<Track>,
 
     current_track: String,
+    current_track_id: usize,
 
     current_nn: String,
 }
@@ -171,21 +172,28 @@ pub struct TemplateApp {
 impl Default for TemplateApp {
     fn default() -> Self {
         let mut params_sim = SimulationParameters::default();
+        
         params_sim.enable_all_tracks();
-        params_sim.simulation_enable_random_nn_output = false;
-        params_sim.eval_penalty.value = 200.;
+        params_sim.disable_track("straight_45");
+        params_sim.eval_add_min_distance = false;
+        params_sim.eval_add_other_physics = true;
+        params_sim.eval_calc_all_physics = true;
+        params_sim.evolve_simple_physics = false;
+        params_sim.mutate_car_enable = false;
+        params_sim.nn.hidden_layers = vec![10];
+        params_sim.nn.inv_distance_coef = 30.;
+        params_sim.nn.pass_current_track = true;
+        params_sim.nn.pass_dirs_diff = true;
+        params_sim.nn.pass_internals = true;
+        params_sim.nn.pass_next_size = 3;
+        params_sim.nn.pass_simple_physics_value = false;
+        params_sim.nn.view_angle_ratio = 3. / 6.;
         params_sim.rewards_add_each_acquire = true;
         params_sim.rewards_enable_distance_integral = true;
-        params_sim.mutate_car_enable = false;
-        params_sim.eval_add_min_distance = false;
-        params_sim.simulation_stop_penalty.value = 100.;
-        params_sim.simulation_simple_physics = 1.;
         params_sim.rewards_second_way = true;
-        params_sim.evolve_simple_physics = true;
-
-        params_sim.nn.pass_internals = true;
-        params_sim.nn.pass_simple_physics_value = false;
-        params_sim.nn.view_angle_ratio = 5. / 6.;
+        params_sim.rewards_second_way_penalty = true;
+        params_sim.simulation_enable_random_nn_output = false;
+        params_sim.simulation_simple_physics = 0.;
 
         Self {
             rng: StdRng::seed_from_u64(42),
@@ -217,8 +225,9 @@ impl Default for TemplateApp {
                 &params_sim,
             ),
 
-            all_tracks: get_all_tracks().into_iter().flat_map(|x| vec![x.clone(), mirror_horizontally(x)]).collect(),
+            all_tracks: get_all_tracks().into_iter().filter(|x| x.name != "straight_45").flat_map(|x| vec![x.clone(), mirror_horizontally(x)]).collect(),
             current_track: "complex".to_string(),
+            current_track_id: 10,
 
             current_nn: Default::default(),
         }
@@ -239,7 +248,12 @@ impl TemplateApp {
 
 impl TemplateApp {
     fn reset_car(&mut self) {
-        self.simulation.reset();
+        self.simulation = CarSimulation::new(
+            Default::default(),
+            self.all_tracks[self.current_track_id].walls.clone(),
+            self.all_tracks[self.current_track_id].rewards.clone(),
+            &self.params_sim,
+        );
         self.trajectories.clear();
         self.graphs.clear();
         self.points_count = 0;
@@ -247,6 +261,7 @@ impl TemplateApp {
         self.offset = pos2(0., 0.);
         self.drag_pos = None;
         self.quota = 0;
+        self.nn_processor.reset();
     }
 }
 
@@ -289,8 +304,10 @@ impl eframe::App for TemplateApp {
                             .selected_text(self.current_track.clone())
                             .show_ui(ui, |ui| {
                                 let mut to_reset = false;
-                                for track in &self.all_tracks {
+                                for (track_id, track) in self.all_tracks.iter().enumerate() {
                                     if ui.selectable_value(&mut self.current_track, track.name.clone(), track.name.clone()).changed() {
+                                        self.current_track_id = track_id;
+                                        self.nn_processor.set_current_track(track_id);
                                         self.simulation = CarSimulation::new(
                                             Default::default(),
                                             track.walls.clone(),
@@ -306,39 +323,47 @@ impl eframe::App for TemplateApp {
                             }
                         );
 
-                        ui.label("NN weights json:");
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            ui.text_edit_multiline(&mut self.current_nn);
-                        });
-                        if ui.button("Set NN").clicked() {
-                            let numbers: Vec<f32> = match serde_json::from_str(&self.current_nn) {
-                                Ok(ok) => ok,
-                                Err(err) => {
-                                    dbg!(err);
-                                    Default::default()
-                                }
-                            };
-                            let nn_sizes = self.params_sim.nn.get_nn_sizes();
-                            let nn_len = self.params_sim.nn.get_nn_len();
-                            if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
-                                self.current_nn.clear();
-                                self.params_sim = patch_params_sim(&numbers, &self.params_sim);
-                                let true_params_sim = SimulationParameters::true_metric(&self.params_sim);
-                                let true_evals = eval_nn(&numbers, &self.params_phys, &true_params_sim);
-                                print_evals(&true_evals);
-                                println!("Cost: {}", sum_evals(&true_evals, &true_params_sim));
-                                println!("-----");
-                                self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, 0); // todo(optozorax): pass current track
-                                self.reset_car();
-                            } else {
-                                println!("Wrong size: expected {nn_len}, got: {}", numbers.len());
-                            }
-                        }
-
                         if ui.button("Mutate car").clicked() {
                             self.reset_car();
                             self.simulation.car = mutate_car(Default::default(), &self.params_sim);
                         }
+
+                        if ui.button(if self.override_nn { "Let NN drive!" } else { "Let me drive!" }).clicked() {
+                            self.override_nn = !self.override_nn;
+                        }
+
+                        CollapsingHeader::new("Insert NN")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label("NN weights json:");
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.text_edit_multiline(&mut self.current_nn);
+                                });
+                                if ui.button("Set NN").clicked() {
+                                    let numbers: Vec<f32> = match serde_json::from_str(&self.current_nn) {
+                                        Ok(ok) => ok,
+                                        Err(err) => {
+                                            dbg!(err);
+                                            Default::default()
+                                        }
+                                    };
+                                    let nn_sizes = self.params_sim.nn.get_nn_sizes();
+                                    let nn_len = self.params_sim.nn.get_nns_len();
+                                    if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
+                                        self.current_nn.clear();
+                                        self.params_sim = patch_params_sim(&numbers, &self.params_sim);
+                                        // let true_params_sim = SimulationParameters::true_metric(&self.params_sim);
+                                        let true_evals = eval_nn(&numbers, &self.params_phys, &self.params_sim);
+                                        print_evals(&true_evals);
+                                        println!("Cost: {}", sum_evals(&true_evals, &self.params_sim));
+                                        println!("-----");
+                                        self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, self.current_track_id);
+                                        self.reset_car();
+                                    } else {
+                                        println!("Wrong size: expected {nn_len}, got: {}", numbers.len());
+                                    }
+                                }
+                            });
 
                         CollapsingHeader::new("Simulation parameters")
                             .default_open(false)
@@ -356,9 +381,9 @@ impl eframe::App for TemplateApp {
                                 self.params_intr.ui(ui);
                             });
 
-                        self.params_phys = self
-                            .params_sim
-                            .patch_physics_parameters(self.params_phys.clone());
+                        // self.params_phys = self
+                        //     .params_sim
+                        //     .patch_physics_parameters(self.params_phys.clone());
                     });
                     Frame::canvas(ui.style()).show(ui, |ui| {
                         let (mut response, painter) = ui.allocate_painter(
@@ -530,17 +555,20 @@ impl eframe::App for TemplateApp {
 
                         self.quota += 1;
 
+                        for simulation_i in 0..self.params_intr.simulations_per_frame {
                         self.simulation.step(
                             &self.params_phys,
                             &self.params_sim,
                             &mut |origin, dir_pos, t| {
-                                painter.add(Shape::line(
-                                    vec![
-                                        to_screen.transform_pos(origin),
-                                        to_screen.transform_pos(origin + (dir_pos - origin) * t),
-                                    ],
-                                    Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
-                                ));
+                                if simulation_i == 0 {
+                                    painter.add(Shape::line(
+                                        vec![
+                                            to_screen.transform_pos(origin),
+                                            to_screen.transform_pos(origin + (dir_pos - origin) * t),
+                                        ],
+                                        Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
+                                    ));
+                                }
                             },
                             &mut |time_passed, distance_percent, dpenalty, dirs, internals| {
                                 self.graphs.add_point(
@@ -627,9 +655,6 @@ impl eframe::App for TemplateApp {
                                     }
                                 }
 
-                                if backspace_pressed {
-                                    self.override_nn = !self.override_nn;
-                                }
                                 if self.override_nn {
                                     CarInput {
                                         brake: keys_down.contains(&egui::Key::Space) as usize
@@ -700,12 +725,14 @@ impl eframe::App for TemplateApp {
                                 );
                             },
                             &mut |car| {
-                                car.draw_forces(
-                                    &painter,
-                                    &self.params_intr,
-                                    &self.params_phys,
-                                    &to_screen,
-                                );
+                                if simulation_i == 0 {
+                                    car.draw_forces(
+                                        &painter,
+                                        &self.params_intr,
+                                        &self.params_phys,
+                                        &to_screen,
+                                    );
+                                }
 
                                 self.trajectories.push_back(car.get_center());
                                 self.points_count += 1;
@@ -715,6 +742,7 @@ impl eframe::App for TemplateApp {
                                 }
                             },
                         );
+                        }
                     });
                 });
 

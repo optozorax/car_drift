@@ -17,16 +17,16 @@ use std::f32::consts::TAU;
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct PhysicsParameters {
-    traction_coefficient: f32,
-    gravity: f32,
-    friction_coefficient: f32,
-    full_force_on_speed: f32,
+    pub traction_coefficient: f32,
+    pub gravity: f32,
+    pub friction_coefficient: f32,
+    pub full_force_on_speed: f32,
     pub acceleration_ratio: f32,
-    rolling_resistance_coefficient: f32,
-    wheel_turn_per_time: f32,
-    angle_limit: f32,
-    wall_force: f32,
-    max_speed: f32,
+    pub rolling_resistance_coefficient: f32,
+    pub wheel_turn_per_time: f32,
+    pub angle_limit: f32,
+    pub wall_force: f32,
+    pub max_speed: f32,
     pub steps_per_time: usize,
     pub time: f32,
     pub simple_physics_ratio: f32, // 0 - hard, 1 - simple

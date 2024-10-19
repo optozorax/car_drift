@@ -208,7 +208,7 @@ impl Default for TemplateApp {
 
             quota: 0,
 
-            nn_processor: NnProcessor::new_zeros(Default::default(), 1.0),
+            nn_processor: NnProcessor::new_zeros(Default::default(), 1.0, 0),
 
             simulation: CarSimulation::new(
                 Default::default(),
@@ -328,7 +328,7 @@ impl eframe::App for TemplateApp {
                                 print_evals(&true_evals);
                                 println!("Cost: {}", sum_evals(&true_evals, &true_params_sim));
                                 println!("-----");
-                                self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics);
+                                self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, 0); // todo(optozorax): pass current track
                                 self.reset_car();
                             } else {
                                 println!("Wrong size: expected {nn_len}, got: {}", numbers.len());

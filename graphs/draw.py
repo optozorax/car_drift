@@ -81,7 +81,7 @@ styles = [
 
 # ----------------------------------------------------------------------------
 
-info_field = "true_evals"
+info_field = "evals"
 
 def step_get_eval_value(step):
     return step["evals_cost"]
@@ -96,7 +96,8 @@ def step_get_true_eval_value(step):
     return step["true_evals_cost"]
 
 def step_get_track_completed(step, track):
-    if [x for x in step[info_field] if x["name"] == track][0]["all_acquired"]:
+    track = [x for x in step[info_field] if x["name"] == track]
+    if len(track) > 0 and track[0]["all_acquired"]:
         return 1.0
     else:
         return 0.0
@@ -278,7 +279,7 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
     fig.suptitle(title)
     draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles)
     for ax in axs.flat:
-        ax.set_xlim(left=-30, right=530)
+        # ax.set_xlim(left=-30, right=530)
         ax.grid(axis='both', color='0.85')
     plt.tight_layout()
     plt.savefig(filename)
@@ -783,6 +784,142 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 # draw_graph(
 #     [
 #         {
+#             "data": read_json_file("./nn_restart_sm.json"),
+#             "name": "just restart",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./nn_restart_neuron_sm.json"),
+#             "name": "restart with new neuron",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./nn_restart_layer_sm.json"),
+#             "name": "restart with new layer",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#     ],
+#     "Different approaches to restart a evolution",
+#     "_restart.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evo_default_pop_30_rate_1_dist_10.json"),
+#             "name": "distance 10",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./evo_dist_1.json"),
+#             "name": "distance 1",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./evo_dist_5.json"),
+#             "name": "distance 5",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./evo_dist_15.json"),
+#             "name": "distance 15",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#         {
+#             "data": read_json_file("./evo_dist_20.json"),
+#             "name": "distance 20",
+#             "alpha": 0.5,
+#             "color": colors[4],
+#         },
+#     ],
+#     "Distance to solution (evolution parameter)",
+#     "_distance_to_solution.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evo_default_pop_30_rate_1_dist_10.json"),
+#             "name": "population 30",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./evo_population_10.json"),
+#             "name": "population 10",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./evo_population_60.json"),
+#             "name": "population 60",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./evo_population_100.json"),
+#             "name": "population 100",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#     ],
+#     "Population size",
+#     "_population.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./evo_default_pop_30_rate_1_dist_10.json"),
+#             "name": "rate 1",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./evo_rate_0_8.json"),
+#             "name": "rate 0.8",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./evo_rate_0_5.json"),
+#             "name": "rate 0.5",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./evo_rate_0_3.json"),
+#             "name": "rate 0.3",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#     ],
+#     "Learning rate (evolution parameter) (from 0 to 1)",
+#     "_learning_rate.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
+# draw_graph(
+#     [
+#         {
 #             "data": read_json_file("./evolve_simple_NEW.json"),
 #             "name": "for loop to evolve simple",
 #         },
@@ -791,6 +928,18 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     "evolve_simple_NEW_2.png",
 #     skip_individuals=True,
 # )
+
+draw_graph(
+    [
+        {
+            "data": read_json_file("./simple_test_all_physics.json"),
+            "name": "simple test current track",
+        },
+    ],
+    "simple_test_all_physics",
+    "simple_test_all_physics.png",
+    skip_individuals=True,
+)
 
 
 # draw_graph(
@@ -828,65 +977,65 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
-data_nn = read_json_file("./nn_default.json")
-data_nn_restart = read_json_file("./nn_restart.json")
-for file_name in json_files:
-    # if file_name != "evolve_simple_2w.json":
-    #     continue
-    file_path = os.path.join('.', file_name)
-    data = read_json_file(file_path)
-    if file_name.startswith("nn_restart"):
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_nn_restart,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    elif file_name.startswith("nn_"):
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_nn,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    # else:
-        # draw_graph(
-        #     [
-        #         {
-        #             "data": data,
-        #             "name": "current",
-        #         },
-        #         {
-        #             "data": data_default,
-        #             "name": "default",
-        #             "color": 'gray',
-        #             "alpha": 0.5,
-        #             'style': 'dashed',
-        #         }
-        #     ],
-        #     f'Graphs for {file_name}',
-        #     f'{file_name}_graphs.png',
-        # )
-    print(f"Finish drawing for {file_name}")
+# data_nn = read_json_file("./nn_default.json")
+# data_nn_restart = read_json_file("./nn_restart.json")
+# for file_name in json_files:
+#     if file_name != "nn_default_sm.json":
+#         continue
+#     file_path = os.path.join('.', file_name)
+#     data = read_json_file(file_path)
+#     if file_name.startswith("nn_restart"):
+#         draw_graph(
+#             [
+#                 {
+#                     "data": data,
+#                     "name": "current",
+#                 },
+#                 {
+#                     "data": data_nn_restart,
+#                     "name": "default",
+#                     "color": 'gray',
+#                     "alpha": 0.5,
+#                     'style': 'dashed',
+#                 }
+#             ],
+#             f'Graphs for {file_name}',
+#             f'{file_name}_graphs.png',
+#         )
+#     elif file_name.startswith("nn_"):
+#         draw_graph(
+#             [
+#                 {
+#                     "data": data,
+#                     "name": "current",
+#                 },
+#                 {
+#                     "data": data_nn,
+#                     "name": "default",
+#                     "color": 'gray',
+#                     "alpha": 0.5,
+#                     'style': 'dashed',
+#                 }
+#             ],
+#             f'Graphs for {file_name}',
+#             f'{file_name}_graphs.png',
+#         )
+#     # else:
+#         # draw_graph(
+#         #     [
+#         #         {
+#         #             "data": data,
+#         #             "name": "current",
+#         #         },
+#         #         {
+#         #             "data": data_default,
+#         #             "name": "default",
+#         #             "color": 'gray',
+#         #             "alpha": 0.5,
+#         #             'style': 'dashed',
+#         #         }
+#         #     ],
+#         #     f'Graphs for {file_name}',
+#         #     f'{file_name}_graphs.png',
+#         # )
+#     print(f"Finish drawing for {file_name}")

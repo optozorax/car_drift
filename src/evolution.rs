@@ -62,17 +62,22 @@ pub struct NnParameters {
     pub pass_time: bool,
     pub pass_distance: bool,
     pub pass_dpenalty: bool,
-    pub pass_dirs: bool,
     pub pass_internals: bool,
     pub pass_prev_output: bool,
     pub pass_simple_physics_value: bool,
-    pub dirs_size: usize,
     pub pass_next_size: usize,
     pub hidden_layers: Vec<usize>,
     pub inv_distance: bool,
     pub inv_distance_coef: f32,
     pub inv_distance_pow: f32,
     pub view_angle_ratio: f32,
+
+    pub pass_dirs: bool,
+    pub dirs_size: usize,
+    pub pass_dirs_diff: bool,
+
+    pub pass_current_track: bool,
+    pub max_tracks: usize,
 
     pub use_dirs_autoencoder: bool,
     pub autoencoder_exits: usize,
@@ -116,6 +121,9 @@ pub struct SimulationParameters {
     pub eval_distance: Clamped,     // ratio from 0 to 5000
     pub eval_acquired: Clamped,     // ratio from 0 to 5000
     pub eval_penalty: Clamped,      // ratio from 0 to 5000
+    pub eval_calc_all_physics: bool,
+    pub eval_calc_all_physics_count: usize,
+    pub eval_add_other_physics: bool,
 
     pub evolve_simple_physics: bool,
     pub hard_physics_reward: Clamped,
@@ -199,6 +207,8 @@ impl NnParameters {
             + self.pass_next_size
             + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
             + self.pass_simple_physics_value as usize
+            + self.pass_current_track as usize * self.max_tracks
+            + self.pass_dirs_diff as usize * self.dirs_size
     }
 
     pub fn get_total_output_neurons(&self) -> usize {
@@ -948,6 +958,7 @@ pub struct NnProcessor {
     prev_output: Vec<f32>,
     autoencoder_input: Vec<f32>,
     autoencoder_output: Vec<f32>,
+    prev_dirs: Vec<Option<f32>>,
     nn: NeuralNetwork,
     nn_autoencoder_input: NeuralNetwork,
     nn_autoencoder_output: NeuralNetwork,
@@ -958,16 +969,19 @@ pub struct NnProcessor {
 
     output_diff_loss: f32,
     output_regularization_loss: f32,
+
+    current_track: usize,
 }
 
 impl NnProcessor {
-    pub fn new_zeros(nn_params: NnParameters, simple_physics: f32) -> Self {
+    pub fn new_zeros(nn_params: NnParameters, simple_physics: f32, current_track: usize) -> Self {
         Self {
             input_values: vec![0.; nn_params.get_total_input_neurons()],
             next_values: vec![0.; nn_params.pass_next_size],
             prev_output: vec![0.; NnParameters::CAR_OUTPUT_SIZE],
             autoencoder_input: vec![0.; nn_params.dirs_size],
             autoencoder_output: vec![0.; nn_params.autoencoder_exits],
+            prev_dirs: vec![None; nn_params.dirs_size],
             params: nn_params.clone(),
             nn: NeuralNetwork::new_zeros(nn_params.get_nn_sizes()),
             nn_autoencoder_input: NeuralNetwork::new_zeros(nn_params.get_nn_autoencoder_input_sizes()),
@@ -977,10 +991,11 @@ impl NnProcessor {
             calc_counts: 0,
             output_diff_loss: 0.,
             output_regularization_loss: 0.,
+            current_track,
         }
     }
 
-    pub fn new(params: &[f32], nn_params: NnParameters, simple_physics: f32) -> Self {
+    pub fn new(params: &[f32], nn_params: NnParameters, simple_physics: f32, current_track: usize) -> Self {
         assert_eq!(params.len(), nn_params.get_nns_len());
         let (params_nn, params_other) = params.split_at(nn_params.get_nn_len());
         let (params_autoencoder_input, params_autoencoder_output) = params_other.split_at(nn_params.get_nn_autoencoder_input_len());
@@ -990,6 +1005,7 @@ impl NnProcessor {
             prev_output: vec![0.; NnParameters::CAR_OUTPUT_SIZE],
             autoencoder_input: vec![0.; nn_params.dirs_size],
             autoencoder_output: vec![0.; nn_params.autoencoder_exits],
+            prev_dirs: vec![None; nn_params.dirs_size],
             params: nn_params.clone(),
             nn: NeuralNetwork::new_params(nn_params.get_nn_sizes(), params_nn),
             nn_autoencoder_input: if nn_params.use_dirs_autoencoder { NeuralNetwork::new_params(nn_params.get_nn_autoencoder_input_sizes(), params_autoencoder_input)} else { NeuralNetwork::new_zeros(vec![1, 1]) },
@@ -999,6 +1015,7 @@ impl NnProcessor {
             calc_counts: 0,
             output_diff_loss: 0.,
             output_regularization_loss: 0.,
+            current_track,
         }
     }
 
@@ -1033,6 +1050,13 @@ impl NnProcessor {
 
         if self.params.pass_dpenalty {
             *input_values_iter.next().unwrap() = dpenalty;
+        }
+
+        if self.params.pass_dirs_diff {
+            for (prev, current) in self.prev_dirs.iter_mut().zip(dirs.iter()) {
+                *input_values_iter.next().unwrap() = Self::convert_dir(&self.params, *prev) - Self::convert_dir(&self.params, *current);
+                *prev = *current;
+            }
         }
 
         if self.params.pass_dirs {
@@ -1081,6 +1105,12 @@ impl NnProcessor {
 
         if self.params.pass_simple_physics_value {
             *input_values_iter.next().unwrap() = self.simple_physics;
+        }
+
+        if self.params.pass_current_track {
+            for i in 0..self.params.max_tracks {
+                *input_values_iter.next().unwrap() = (i == self.current_track) as usize as f32;
+            }
         }
 
         assert!(input_values_iter.next().is_none());
@@ -1457,11 +1487,13 @@ pub fn eval_nn(
             }
         })
         .collect();
-    for Track {
+
+
+    for (track_no, Track {
         name,
         walls,
         rewards,
-    } in tracks
+    }) in tracks.into_iter().enumerate()
     {
         let max = if params_sim.mutate_car_enable {
             params_sim.mutate_car_count
@@ -1469,61 +1501,105 @@ pub fn eval_nn(
             1
         };
         for i in 0..max {
-            let car = {
-                let result: Car = Default::default();
-                if i != 0 && params_sim.mutate_car_enable {
-                    mutate_car(result, &params_sim)
-                } else {
-                    result
-                }
+            let physics_max = if params_sim.eval_calc_all_physics {
+                params_sim.eval_calc_all_physics_count
+            } else {
+                1
             };
-            let mut nn_processor = NnProcessor::new(nn_params, params_sim.nn.clone(), params_sim.simulation_simple_physics);
-            let mut simulation =
-                CarSimulation::new(car, walls.clone(), rewards.clone(), &params_sim);
-
-            let mut early_finish_percent = 0.;
-            let steps_quota = params_sim.simulation_steps_quota;
-            for i in 0..steps_quota {
-                if simulation.step(
-                    &params_phys,
-                    &params_sim,
-                    &mut |_, _, _| (),
-                    &mut |time, dist, dpenalty, dirs, internals| {
-                        nn_processor.process(time, dist, dpenalty, dirs, internals, &params_sim)
-                    },
-                    &mut |_, _, _| (),
-                    &mut |_| (),
-                ) {
-                    break;
+            let default = (0.0, 0.9, 0.4, 0.5, 0.1);
+            for (simple_physics, traction, acceleration_ratio, friction_coef, turn_speed) in (0..physics_max).map(|i| if i == physics_max-1 { 0.98 } else {i as f32 / (physics_max - 1) as f32}).map(|s|{ let mut x = default; x.0 = s; x })
+            .chain(
+                if params_sim.eval_add_other_physics {
+                    vec![
+                        { let mut x = default; x.1 = 0.5; x },
+                        { let mut x = default; x.1 = 0.15; x },
+                        { let mut x = default; x.2 = 0.8; x },
+                        { let mut x = default; x.2 = 1.0; x },
+                        { let mut x = default; x.3 = 0.0; x },
+                        { let mut x = default; x.3 = 1.0; x },
+                        { let mut x = default; x.4 = 0.3; x },
+                    ].into_iter()
+                } else {
+                    vec![].into_iter()
+                }) {
+                let mut params_sim = params_sim.clone();
+                let mut params_phys = params_phys.clone();
+                if params_sim.eval_calc_all_physics || params_sim.eval_add_other_physics {
+                    params_sim.simulation_simple_physics = simple_physics;
+                    params_phys = params_sim.patch_physics_parameters(params_phys.clone());
                 }
 
-                if simulation.reward_path_processor.all_acquired(&params_sim) {
-                    early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
-                    break;
+                if params_sim.eval_add_other_physics {
+                    params_phys.traction_coefficient = traction;
+                    params_phys.acceleration_ratio = acceleration_ratio;
+                    params_phys.friction_coefficient = friction_coef;
+                    params_phys.wheel_turn_per_time = turn_speed;
                 }
-            }
-            result.push(TrackEvaluation {
-                name: name.clone()
-                    + &if i != 0 {
-                        format!(":{i}")
+
+                let car = {
+                    let result: Car = Default::default();
+                    if i != 0 && params_sim.mutate_car_enable {
+                        mutate_car(result, &params_sim)
                     } else {
-                        Default::default()
-                    },
-                penalty: simulation.penalty,
-                reward: simulation.reward,
-                early_finish_percent,
-                distance_percent: simulation.reward_path_processor.distance_percent(),
-                rewards_acquired_percent: simulation
-                    .reward_path_processor
-                    .rewards_acquired_percent(&params_sim),
-                all_acquired: simulation.reward_path_processor.all_acquired(&params_sim),
-                simple_physics: params_sim.simulation_simple_physics,
-                simple_physics_raw: other_params[0],
-                autoencoder_loss: nn_processor.get_autoencoder_loss(),
-                regularization_loss: nn_processor.get_regularization_loss(),
-                output_diff_loss: nn_processor.get_output_diff_loss(),
-                output_regularization_loss: nn_processor.get_output_regularization_loss(),
-            });
+                        result
+                    }
+                };
+                let mut nn_processor = NnProcessor::new(nn_params, params_sim.nn.clone(), params_sim.simulation_simple_physics, track_no);
+                let mut simulation =
+                    CarSimulation::new(car, walls.clone(), rewards.clone(), &params_sim);
+
+                let mut early_finish_percent = 0.;
+                let steps_quota = params_sim.simulation_steps_quota;
+                for i in 0..steps_quota {
+                    if simulation.step(
+                        &params_phys,
+                        &params_sim,
+                        &mut |_, _, _| (),
+                        &mut |time, dist, dpenalty, dirs, internals| {
+                            nn_processor.process(time, dist, dpenalty, dirs, internals, &params_sim)
+                        },
+                        &mut |_, _, _| (),
+                        &mut |_| (),
+                    ) {
+                        break;
+                    }
+
+                    if simulation.reward_path_processor.all_acquired(&params_sim) {
+                        early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
+                        break;
+                    }
+                }
+                result.push(TrackEvaluation {
+                    name: name.clone()
+                        + &if i != 0 {
+                            format!(":{i}")
+                        } else {
+                            Default::default()
+                        } + &if params_sim.eval_calc_all_physics || params_sim.eval_add_other_physics {
+                            format!(":simple{:.2}", simple_physics)
+                        } else {
+                            Default::default()
+                        } + &if params_sim.eval_add_other_physics {
+                            format!(":t{traction:.2}:a{acceleration_ratio:.2}:f{friction_coef:.2}:t{turn_speed:.2}")
+                        } else {
+                            Default::default()
+                        },
+                    penalty: simulation.penalty,
+                    reward: simulation.reward,
+                    early_finish_percent,
+                    distance_percent: simulation.reward_path_processor.distance_percent(),
+                    rewards_acquired_percent: simulation
+                        .reward_path_processor
+                        .rewards_acquired_percent(&params_sim),
+                    all_acquired: simulation.reward_path_processor.all_acquired(&params_sim),
+                    simple_physics: params_sim.simulation_simple_physics,
+                    simple_physics_raw: other_params[0],
+                    autoencoder_loss: nn_processor.get_autoencoder_loss(),
+                    regularization_loss: nn_processor.get_regularization_loss(),
+                    output_diff_loss: nn_processor.get_output_diff_loss(),
+                    output_regularization_loss: nn_processor.get_output_regularization_loss(),
+                });
+            }
         }
     }
     result
@@ -2178,6 +2254,7 @@ impl Default for NnParameters {
             pass_distance: false,
             pass_dpenalty: true,
             pass_dirs: true,
+            pass_dirs_diff: false,
             pass_internals: false,
             pass_prev_output: false,
             pass_simple_physics_value: false,
@@ -2192,6 +2269,9 @@ impl Default for NnParameters {
             use_dirs_autoencoder: false,
             autoencoder_hidden_layers: vec![6],
             autoencoder_exits: 5,
+
+            pass_current_track: false,
+            max_tracks: 12,
         }
     }
 }
@@ -2253,6 +2333,9 @@ impl Default for SimulationParameters {
             eval_distance: Clamped::new(1000., 0., 5000.),
             eval_acquired: Clamped::new(1000., 0., 5000.),
             eval_penalty: Clamped::new(20., 0., 5000.),
+            eval_calc_all_physics: false,
+            eval_calc_all_physics_count: 5,
+            eval_add_other_physics: false,
 
             evolve_simple_physics: false,
             hard_physics_reward: Clamped::new(10000., 0., 10000.),
@@ -2304,7 +2387,7 @@ pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
 const PRINT: bool = true;
 const PRINT_EVERY_10: bool = true;
-const PRINT_EVALS: bool = false;
+const PRINT_EVALS: bool = true;
 
 const RUNS_COUNT: usize = 30;
 const POPULATION_SIZE: usize = 30;
@@ -2458,50 +2541,67 @@ pub fn evolution() {
     
     params_sim.nn.pass_internals = true;
     params_sim.nn.pass_simple_physics_value = false;
-    params_sim.nn.view_angle_ratio = 5. / 6.;
     params_sim.simulation_stop_penalty.value = 20.;
-    params_sim.simulation_simple_physics = 0.0;
+    params_sim.simulation_simple_physics = 1.0;
 
     params_sim.evolution_generation_count = 200;
 
+    params_sim.nn.view_angle_ratio = 3. / 6.;
+    params_sim.nn.hidden_layers = vec![10];
+    params_sim.nn.pass_next_size = 1;
+    params_sim.nn.inv_distance_coef = 30.;
+
     let mut params_sim_copy = params_sim.clone();
 
-    test_params_sim(&params_sim, &params_phys, "evo_default_pop_30_rate_1_dist_10");
-    params_sim = params_sim_copy.clone();
+    params_sim.nn.pass_current_track = true;
+    params_sim.eval_calc_all_physics = true;
+    params_sim.eval_add_other_physics = true;
+    params_sim.nn.pass_dirs_diff = true;
+    params_sim.nn.pass_next_size = 2;
+    params_sim.nn.hidden_layers = vec![];
+    params_sim.simulation_stop_penalty.value = 40.;
+    params_sim.eval_calc_all_physics_count = 4;
+    let nn_len = params_sim.nn.get_nns_len();
+    let mut rng = thread_rng();
+    let mut input = (0..nn_len+OTHER_PARAMS_SIZE).map(|_| rng.gen_range(-10.0..10.0)).collect::<Vec<f32>>();
+    save_runs(vec![evolve_by_cma_es_custom(&params_sim, &params_phys, &input, 100, 1000, None, None)], "simple_test_all_physics_2");
 
-    params_sim.evolution_population_size = 15;
-    test_params_sim(&params_sim, &params_phys, "evo_population_10");
-    params_sim = params_sim_copy.clone();
+    // test_params_sim(&params_sim, &params_phys, "evo_default_pop_30_rate_1_dist_10");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.evolution_population_size = 60;
-    test_params_sim(&params_sim, &params_phys, "evo_population_60");
-    params_sim = params_sim_copy.clone();
+    // params_sim.evolution_population_size = 15;
+    // test_params_sim(&params_sim, &params_phys, "evo_population_10");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.evolution_population_size = 100;
-    test_params_sim(&params_sim, &params_phys, "evo_population_100");
-    params_sim = params_sim_copy.clone();
+    // params_sim.evolution_population_size = 60;
+    // test_params_sim(&params_sim, &params_phys, "evo_population_60");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.evolution_learning_rate = 0.8;
-    test_params_sim(&params_sim, &params_phys, "evo_rate_0_8");
-    params_sim = params_sim_copy.clone();
+    // params_sim.evolution_population_size = 100;
+    // test_params_sim(&params_sim, &params_phys, "evo_population_100");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.evolution_learning_rate = 0.5;
-    test_params_sim(&params_sim, &params_phys, "evo_rate_0_5");
+    // params_sim.evolution_learning_rate = 0.8;
+    // test_params_sim(&params_sim, &params_phys, "evo_rate_0_8");
+    // params_sim = params_sim_copy.clone();
 
-    params_sim.evolution_learning_rate = 0.3;
-    test_params_sim(&params_sim, &params_phys, "evo_rate_0_3");
+    // params_sim.evolution_learning_rate = 0.5;
+    // test_params_sim(&params_sim, &params_phys, "evo_rate_0_5");
 
-    params_sim.evolution_distance_to_solution = 1.;
-    test_params_sim(&params_sim, &params_phys, "evo_dist_1");
+    // params_sim.evolution_learning_rate = 0.3;
+    // test_params_sim(&params_sim, &params_phys, "evo_rate_0_3");
 
-    params_sim.evolution_distance_to_solution = 5.;
-    test_params_sim(&params_sim, &params_phys, "evo_dist_5");
+    // params_sim.evolution_distance_to_solution = 1.;
+    // test_params_sim(&params_sim, &params_phys, "evo_dist_1");
 
-    params_sim.evolution_distance_to_solution = 15.;
-    test_params_sim(&params_sim, &params_phys, "evo_dist_15");
+    // params_sim.evolution_distance_to_solution = 5.;
+    // test_params_sim(&params_sim, &params_phys, "evo_dist_5");
 
-    params_sim.evolution_distance_to_solution = 20.;
-    test_params_sim(&params_sim, &params_phys, "evo_dist_20");
+    // params_sim.evolution_distance_to_solution = 15.;
+    // test_params_sim(&params_sim, &params_phys, "evo_dist_15");
+
+    // params_sim.evolution_distance_to_solution = 20.;
+    // test_params_sim(&params_sim, &params_phys, "evo_dist_20");
 
     // params_sim.evolution_sample_mean = true;
     // params_sim.nn.hidden_layers = vec![10];

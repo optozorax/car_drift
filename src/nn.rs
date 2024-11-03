@@ -63,6 +63,15 @@ fn activation_vector(output: &mut [f32]) {
     }
 }
 
+fn strip_bad_values(output: &mut [f32]) {
+    for x in output {
+        *x = x.clamp(-1e6, 1e6);
+        if x.is_nan() {
+            *x = 0.;
+        }
+    }
+}
+
 fn sum_vectors(input: &[f32], vector: &[f32], output: &mut [f32]) {
     for (out, (in1, in2)) in output.iter_mut().zip(input.iter().zip(vector.iter())) {
         *out = in1 + in2;
@@ -177,6 +186,7 @@ impl NeuralNetwork {
                 }
             }
             activation_vector(&mut self.reserved2[..*now]);
+            strip_bad_values(&mut self.reserved2[..*now]);
             offset += now;
             std::mem::swap(&mut self.reserved1, &mut self.reserved2);
         }

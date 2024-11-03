@@ -753,7 +753,7 @@ pub fn walls_from_points(points: impl Iterator<Item = Pos2> + Clone) -> Vec<Wall
 }
 
 pub fn rewards_from_points(points: impl Iterator<Item = Pos2> + Clone) -> Vec<Reward> {
-    points.map(|a| Reward::new(a, 200.)).collect()
+    points.map(|a| Reward::new(a)).collect()
 }
 
 // todo: сделать оптимизацию чтобы не считать синусы и косинусы постоянно
@@ -909,29 +909,12 @@ impl Wall {
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Reward {
     pub center: Pos2,
-    pub size: f32,
-    pub acquired: bool,
 }
 
 impl Reward {
-    pub fn new(center: Pos2, size: f32) -> Self {
+    pub fn new(center: Pos2) -> Self {
         Self {
             center,
-            size,
-            acquired: false,
-        }
-    }
-
-    pub fn process_pos(&mut self, pos: Pos2) -> bool {
-        if !self.acquired {
-            if (pos - self.center).length() < self.size {
-                self.acquired = true;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
         }
     }
 
@@ -953,24 +936,6 @@ impl Reward {
                 .max_decimals(0),
         );
         ui.end_row();
-
-        ui.label("Size:");
-        ui.add(
-            DragValue::new(&mut self.size)
-                .speed(5.0)
-                .min_decimals(0)
-                .max_decimals(0),
-        );
-        ui.end_row();
-    }
-
-    pub fn get_points(&self) -> Vec<Pos2> {
-        let n = 18;
-        (0..n)
-            .map(|i| i as f32 / n as f32 * TAU)
-            .map(|i| pos2(i.sin(), i.cos()))
-            .map(|p| p * self.size + self.center.to_vec2())
-            .collect()
     }
 }
 
@@ -978,8 +943,6 @@ impl Default for Reward {
     fn default() -> Self {
         Self {
             center: pos2(500., 500.),
-            size: 500.,
-            acquired: false,
         }
     }
 }

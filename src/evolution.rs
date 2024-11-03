@@ -531,8 +531,11 @@ pub fn track_straight_line() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-8.00, 13.00),
+                    pos2(-14.23, 17.90),
                     pos2(5635.54, 246.73),
+                    pos2(5640.00, -98.93),
+                    pos2(6238.29, -76.85),
+                    pos2(6273.62, 485.02),
                     pos2(5630.75, 488.32),
                     pos2(-100.47, 409.92),
                     pos2(-14.23, 17.90),
@@ -540,12 +543,7 @@ pub fn track_straight_line() -> (String, Vec<PointsStorage>) {
             },
             PointsStorage {
                 is_reward: true,
-                points: vec![
-                    pos2(516.17, 234.58),
-                    pos2(1918.37, 265.53),
-                    pos2(4208.82, 325.74),
-                    pos2(5510.92, 362.09),
-                ],
+                points: vec![pos2(255.56, 251.16), pos2(5484.87, 358.62)],
             },
         ],
     )
@@ -559,7 +557,7 @@ pub fn track_turn_right_smooth() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(83.33, 3.46),
+                    pos2(84.64, -1.89),
                     pos2(1227.77, -3.24),
                     pos2(2054.61, 103.97),
                     pos2(2971.24, 374.67),
@@ -567,6 +565,9 @@ pub fn track_turn_right_smooth() -> (String, Vec<PointsStorage>) {
                     pos2(3966.93, 1354.28),
                     pos2(4023.21, 1911.76),
                     pos2(4039.29, 2559.02),
+                    pos2(4052.83, 2951.00),
+                    pos2(2972.12, 2941.26),
+                    pos2(2973.34, 2549.38),
                     pos2(3669.42, 2560.36),
                     pos2(3660.04, 1903.72),
                     pos2(3590.36, 1490.97),
@@ -581,18 +582,14 @@ pub fn track_turn_right_smooth() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(651.25, 247.73),
-                    pos2(1172.18, 240.78),
-                    pos2(1725.53, 297.51),
-                    pos2(2405.05, 438.74),
-                    pos2(2972.29, 632.06),
-                    pos2(3428.39, 942.30),
-                    pos2(3768.74, 1398.41),
-                    pos2(3845.14, 1955.22),
-                    pos2(3852.09, 2154.33),
-                    pos2(3848.61, 2261.99),
-                    pos2(3852.09, 2371.97),
-                    pos2(3846.30, 2448.37),
+                    pos2(251.92, 250.12),
+                    pos2(1234.09, 215.53),
+                    pos2(2034.77, 349.62),
+                    pos2(2942.04, 604.14),
+                    pos2(3430.01, 958.38),
+                    pos2(3786.43, 1417.46),
+                    pos2(3839.26, 1887.05),
+                    pos2(3851.00, 2485.98),
                 ],
             },
         ],
@@ -610,6 +607,9 @@ pub fn track_turn_left_90() -> (String, Vec<PointsStorage>) {
                     pos2(80.34, -5.05),
                     pos2(997.84, -6.53),
                     pos2(997.84, -1646.50),
+                    pos2(994.08, -2093.93),
+                    pos2(1880.17, -2085.06),
+                    pos2(1878.69, -1653.10),
                     pos2(1457.33, -1649.46),
                     pos2(1466.19, 534.11),
                     pos2(87.06, 524.75),
@@ -619,17 +619,11 @@ pub fn track_turn_left_90() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(581.19, 257.00),
-                    pos2(1161.83, 110.73),
-                    pos2(1229.80, -449.22),
-                    pos2(1229.80, -579.24),
-                    pos2(1228.32, -704.82),
-                    pos2(1228.32, -814.16),
-                    pos2(1226.84, -941.22),
-                    pos2(1223.89, -1047.59),
-                    pos2(1222.41, -1186.47),
-                    pos2(1222.41, -1295.81),
-                    pos2(1220.93, -1406.62),
+                    pos2(258.24, 250.23),
+                    pos2(785.25, 251.82),
+                    pos2(1063.20, 200.65),
+                    pos2(1211.43, 80.65),
+                    pos2(1231.00, -149.45),
                     pos2(1220.93, -1508.56),
                 ],
             },
@@ -644,11 +638,14 @@ pub fn track_turn_left_180() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(69.00, 6.00),
-                    pos2(75.16, 494.65),
+                    pos2(68.68, -37.37),
+                    pos2(68.39, 495.62),
                     pos2(1628.53, 506.55),
                     pos2(1626.82, -437.56),
                     pos2(70.41, -430.71),
+                    pos2(75.44, -1071.74),
+                    pos2(-334.32, -1068.79),
+                    pos2(-332.84, -36.24),
                     pos2(68.70, -37.34),
                     pos2(1219.76, -44.18),
                 ],
@@ -656,16 +653,13 @@ pub fn track_turn_left_180() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(578.38, 244.87),
-                    pos2(976.89, 246.58),
-                    pos2(1382.24, 149.09),
-                    pos2(1378.82, -187.85),
-                    pos2(1035.04, -246.00),
-                    pos2(841.78, -239.16),
-                    pos2(674.16, -235.74),
-                    pos2(551.02, -237.45),
-                    pos2(429.59, -237.45),
-                    pos2(270.52, -230.61),
+                    pos2(251.38, 247.87),
+                    pos2(987.99, 246.03),
+                    pos2(1315.29, 175.24),
+                    pos2(1449.97, -39.40),
+                    pos2(1328.72, -223.41),
+                    pos2(953.16, -260.21),
+                    pos2(238.07, -248.15),
                 ],
             },
         ],
@@ -706,7 +700,7 @@ pub fn track_smooth_left_and_right() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(116.58, 91.49),
+                    pos2(110.72, 101.35),
                     pos2(1391.74, -7.79),
                     pos2(1805.02, -432.51),
                     pos2(1927.44, -1337.17),
@@ -717,6 +711,9 @@ pub fn track_smooth_left_and_right() -> (String, Vec<PointsStorage>) {
                     pos2(4414.30, -1315.14),
                     pos2(4428.05, -613.78),
                     pos2(4150.72, 46.32),
+                    pos2(4778.57, 322.66),
+                    pos2(4638.04, 662.90),
+                    pos2(3654.31, 253.14),
                     pos2(3804.62, -109.54),
                     pos2(4024.65, -666.50),
                     pos2(4017.78, -1223.46),
@@ -736,28 +733,17 @@ pub fn track_smooth_left_and_right() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(764.37, 265.17),
-                    pos2(1297.73, 199.50),
-                    pos2(1729.24, -2.85),
-                    pos2(1961.08, -274.89),
-                    pos2(2045.50, -588.47),
-                    pos2(2108.49, -898.03),
-                    pos2(2144.67, -1210.28),
-                    pos2(2221.06, -1507.78),
+                    pos2(257.32, 247.26),
+                    pos2(1508.32, 197.59),
+                    pos2(2056.80, -456.76),
+                    pos2(2158.07, -1332.80),
                     pos2(2369.81, -1773.12),
-                    pos2(2631.13, -1966.09),
-                    pos2(2907.18, -2101.44),
-                    pos2(3228.81, -2106.80),
-                    pos2(3555.79, -2112.16),
-                    pos2(3842.57, -2023.71),
-                    pos2(4023.48, -1771.78),
-                    pos2(4121.31, -1490.36),
-                    pos2(4200.37, -1187.49),
-                    pos2(4200.38, -871.23),
-                    pos2(4191.00, -558.99),
-                    pos2(4128.01, -404.88),
-                    pos2(4074.41, -274.89),
-                    pos2(4048.94, -197.16),
+                    pos2(2813.37, -2095.70),
+                    pos2(3726.17, -2087.27),
+                    pos2(4042.62, -1794.75),
+                    pos2(4209.94, -1277.47),
+                    pos2(4215.89, -625.99),
+                    pos2(4016.48, -138.96),
                 ],
             },
         ],
@@ -772,7 +758,7 @@ pub fn track_complex() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-11.43, -2.86),
+                    pos2(-8.88, -9.06),
                     pos2(2150.00, -1.43),
                     pos2(2142.86, -1431.43),
                     pos2(3690.00, -1424.29),
@@ -780,10 +766,13 @@ pub fn track_complex() -> (String, Vec<PointsStorage>) {
                     pos2(-2832.30, 157.16),
                     pos2(-2834.52, -3251.33),
                     pos2(755.70, -3253.55),
+                    pos2(751.49, -4097.08),
+                    pos2(1868.51, -4094.22),
+                    pos2(1916.49, -2829.04),
                     pos2(751.27, -2828.04),
                     pos2(-2377.98, -2861.28),
                     pos2(-1792.91, -341.48),
-                    pos2(-17.75, 584.88),
+                    pos2(-11.10, 580.45),
                     pos2(-8.88, -9.06),
                     pos2(-11.10, 580.45),
                     pos2(2883.23, 591.53),
@@ -793,21 +782,25 @@ pub fn track_complex() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(594.50, 289.83),
-                    pos2(1211.28, 297.60),
-                    pos2(1820.29, 317.04),
-                    pos2(2472.05, 175.80),
-                    pos2(2503.15, -497.99),
-                    pos2(2526.47, -1037.03),
-                    pos2(2926.86, -1138.10),
-                    pos2(3297.45, -1038.32),
-                    pos2(3275.42, -255.69),
-                    pos2(3290.97, 510.10),
-                    pos2(2859.48, 1025.82),
-                    pos2(-661.09, 726.50),
-                    pos2(-2469.97, -194.79),
-                    pos2(-2567.15, -3022.13),
-                    pos2(-264.59, -3028.93),
+                    pos2(249.86, 250.44),
+                    pos2(1953.63, 285.30),
+                    pos2(2266.79, 233.48),
+                    pos2(2435.79, 66.79),
+                    pos2(2485.06, -204.70),
+                    pos2(2484.85, -717.33),
+                    pos2(2609.34, -1050.41),
+                    pos2(2874.87, -1191.42),
+                    pos2(3175.06, -1060.41),
+                    pos2(3301.25, -774.23),
+                    pos2(3302.97, 488.77),
+                    pos2(2895.47, 1000.49),
+                    pos2(333.65, 1022.85),
+                    pos2(-1671.56, 191.94),
+                    pos2(-2228.68, -312.10),
+                    pos2(-2595.71, -2323.18),
+                    pos2(-2644.09, -2728.56),
+                    pos2(-2598.97, -2967.43),
+                    pos2(-2372.19, -3075.67),
                     pos2(393.66, -3040.27),
                 ],
             },
@@ -868,134 +861,59 @@ pub fn get_all_tracks() -> Vec<(String, Vec<PointsStorage>)> {
 
 pub struct RewardPathProcessor {
     rewards: Vec<Reward>,
-    current_segment: usize,
-    prev_distance: f32,
     max_distance: f32,
-    max_possible_distance: f32,
     current_segment_f32: f32,
 }
 
 impl RewardPathProcessor {
-    const ENABLE_EARLY_ACQUIRE: bool = true;
-
     pub fn new(rewards: Vec<Reward>) -> Self {
-        let max_possible_distance = pairs(rewards.iter())
-            .map(|(a, b)| (b.center - a.center).length())
-            .sum();
         Self {
             rewards,
-            current_segment: 0,
-            prev_distance: 0.,
             max_distance: 0.,
-            max_possible_distance,
             current_segment_f32: 0.,
         }
     }
 
     fn process_point(&mut self, point: Pos2, params: &SimulationParameters) -> f32 {
-        let (rewards, prev, max, current_segment) = (
-            &mut self.rewards,
-            &mut self.prev_distance,
-            &mut self.max_distance,
-            &mut self.current_segment,
-        );
-
-        #[allow(unused_mut)]
         let mut reward_sum = 0.;
 
-        if params.rewards_enable_early_acquire {
-            let mut to_acquire_before: Option<usize> = None;
-            for (pos, reward) in rewards.iter_mut().enumerate() {
-                if !reward.acquired && reward.process_pos(point) {
-                    if params.rewards_add_each_acquire {
-                        reward_sum += 1.;
-                    }
-                    to_acquire_before = Some(pos);
-                }
-            }
-            if let Some(to_acquire_before) = to_acquire_before {
-                for reward in rewards.iter_mut().take(to_acquire_before) {
-                    if !reward.acquired {
-                        if params.rewards_add_each_acquire {
-                            reward_sum += 1.;
-                        }
-                        reward.acquired = true;
-                    }
-                }
-                let mut new_prev = 0.;
-                for (a, b) in pairs(rewards.iter().take(to_acquire_before + 1)) {
-                    new_prev += (b.center - a.center).length();
-                }
-                *prev = new_prev;
-                *current_segment = to_acquire_before;
-                if *max < *prev {
-                    *max = *prev;
-                }
-            }
-        } else if rewards.last_mut().unwrap().process_pos(point) {
-            reward_sum += 1.;
-        }
-
-        if 2 <= rewards.len() && *current_segment + 1 < rewards.len() {
-            let a = rewards[*current_segment].center;
-            let b = rewards[*current_segment + 1].center;
-            let (projection, mut t) = project_to_segment(point, a, b);
-            let dist_on_line = (projection - a).length();
-            let dist_from_point = (projection - point).length();
-            let is_adequate = dist_from_point < params.rewards_progress_distance.value;
-            let current_dist = *prev + dist_on_line;
-            if current_dist > *max && is_adequate {
-                if params.rewards_enable_distance_integral {
-                    reward_sum += (current_dist - *max) * 1. / (dist_from_point + 1.0);
-                }
-                *max = current_dist;
-            }
-
-            if *current_segment + 2 < rewards.len() {
-                let a2 = rewards[*current_segment + 1].center;
-                let b2 = rewards[*current_segment + 2].center;
-                let (projection2, _) = project_to_segment(point, a2, b2);
-                let dist_from_point2 = (projection2 - point).length();
-                let is_adequate2 = dist_from_point2 < params.rewards_progress_distance.value;
-                if dist_from_point2 < dist_from_point && is_adequate2 {
-                    t = 1.;
-                    let dist_on_line2 = (projection - a2).length();
-                    let current_dist2 = *prev + (b - a).length() + dist_on_line2;
-                    if current_dist2 > *max {
-                        if params.rewards_enable_distance_integral {
-                            reward_sum += (current_dist2 - *max) * 1. / (dist_from_point2 + 1.0);
-                        }
-                        *max = current_dist2;
-                    }
-                }
-            }
-
-            if t == 1. && is_adequate {
-                *prev += (b - a).length();
-                *current_segment += 1;
-            }
-        }
-
-        self.current_segment_f32 = {
-            // let (pos, _, _, t) = self.rewards.windows(2).enumerate().map(|(pos, x)| {
-            //     let (a, b) = (x[0].center, x[1].center);
-            //     let (res, t) = project_to_segment(point, a, b);
-            //     (pos, res, (point - res).length(), t)
-            // }).min_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).unwrap();
-            // pos as f32 + t
-            // todo: fix
-
-            1.5
+        let (segm, dist) = if self.rewards.len() >= 2 {
+            let (pos, _, dist, t) = self
+                .rewards
+                .windows(2)
+                .enumerate()
+                .map(|(pos, x)| {
+                    let (a, b) = (x[0].center, x[1].center);
+                    let (res, t) = project_to_segment(point, a, b);
+                    (pos, res, (point - res).length(), t)
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or_else(|| {
+                    dbg!(a);
+                    dbg!(b);
+                    dbg!(&self.rewards);
+                    dbg!(&point);
+                    todo!()
+                }))
+                .unwrap();
+            (pos as f32 + t, dist)
+        } else {
+            (0., 0.)
         };
+        self.current_segment_f32 = segm;
+
+        if self.max_distance < segm {
+            if params.rewards_enable_distance_integral {
+                reward_sum += (self.current_segment_f32 - self.max_distance) / (dist + 1.0);
+            }
+            self.max_distance = self.current_segment_f32;
+        }
 
         reward_sum
     }
 
     fn reset(&mut self) {
-        self.current_segment = 0;
-        self.prev_distance = 0.;
+        self.current_segment_f32 = 0.;
         self.max_distance = 0.;
-        self.rewards.iter_mut().for_each(|x| x.acquired = false);
     }
 
     fn draw(&self, point: Pos2, painter: &Painter, to_screen: &RectTransform) {
@@ -1019,79 +937,23 @@ impl RewardPathProcessor {
             Stroke::new(1.0, Color32::DARK_RED),
         ));
 
-        if 2 <= self.rewards.len() && self.current_segment + 1 < self.rewards.len() {
-            let a = self.rewards[self.current_segment].center;
-            let b = self.rewards[self.current_segment + 1].center;
-            let (projection, _) = project_to_segment(point, a, b);
-            painter.add(Shape::line(
-                vec![
-                    to_screen.transform_pos(point),
-                    to_screen.transform_pos(projection),
-                ],
-                Stroke::new(1.0, Color32::DARK_GREEN),
-            ));
-        }
-
         for (i, (a, b)) in pairs(self.rewards.iter()).enumerate() {
             painter.add(Shape::line(
                 vec![
                     to_screen.transform_pos(a.center),
                     to_screen.transform_pos(b.center),
                 ],
-                Stroke::new(
-                    1.0,
-                    if i < self.current_segment {
-                        Color32::DARK_RED
-                    } else {
-                        Color32::DARK_GREEN
-                    },
-                ),
-            ));
-        }
-
-        for reward in &self.rewards {
-            painter.add(Shape::closed_line(
-                reward
-                    .get_points()
-                    .into_iter()
-                    .map(|p| to_screen.transform_pos(p))
-                    .collect(),
-                Stroke::new(
-                    1.0,
-                    if reward.acquired {
-                        Color32::RED
-                    } else {
-                        Color32::GREEN
-                    },
-                ),
+                Stroke::new(1.0, Color32::DARK_GREEN),
             ));
         }
     }
 
     pub fn distance_percent(&self) -> f32 {
-        self.max_distance / self.max_possible_distance
+        self.max_distance / (self.rewards.len() as f32 - 1.0)
     }
 
-    pub fn all_acquired(&self, params: &SimulationParameters) -> bool {
-        self.rewards_acquired(params) == self.rewards.len()
-    }
-
-    pub fn rewards_acquired(&self, params: &SimulationParameters) -> usize {
-        if params.rewards_enable_early_acquire {
-            self.rewards.iter().filter(|x| x.acquired).count()
-        } else if self.rewards.last().unwrap().acquired {
-            self.rewards.len()
-        } else {
-            0
-        }
-    }
-
-    pub fn rewards_acquired_percent(&self, params: &SimulationParameters) -> f32 {
-        if self.rewards.is_empty() {
-            0.
-        } else {
-            self.rewards_acquired(params) as f32 / self.rewards.len() as f32
-        }
+    pub fn all_acquired(&self) -> bool {
+        (self.distance_percent() - 1.0).abs() < 1e-6
     }
 
     pub fn get_current_segment_f32(&self) -> f32 {
@@ -2633,7 +2495,6 @@ pub struct TrackEvaluation {
     reward: f32,
     early_finish_percent: f32,
     distance_percent: f32,
-    rewards_acquired_percent: f32,
     all_acquired: bool,
     simple_physics: f32,
     simple_physics_raw: f32,
@@ -2647,10 +2508,9 @@ impl std::fmt::Display for TrackEvaluation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} | d {:>5.1}% | a {:>5.1}% | e {:>5.1}% | penalty {:>6.1} | {}",
+            "{} | d {:>5.1}% | e {:>5.1}% | penalty {:>6.1} | {}",
             if self.all_acquired { "✅" } else { "❌" },
             self.distance_percent * 100.,
-            self.rewards_acquired_percent * 100.,
             self.early_finish_percent * 100.,
             self.penalty,
             // self.reward,
@@ -2765,7 +2625,6 @@ pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f3
                         reward: 1000.,
                         early_finish_percent: 1.,
                         distance_percent: 1.,
-                        rewards_acquired_percent: 1.,
                         all_acquired: true,
                         simple_physics: x.simple_physics,
                         simple_physics_raw: 0.,
@@ -2804,7 +2663,6 @@ impl TrackEvaluation {
         0. + self.reward * params.eval_reward.value
             + self.early_finish_percent * params.eval_early_finish.value
             + self.distance_percent * params.eval_distance.value
-            + self.rewards_acquired_percent * params.eval_acquired.value
             - self.penalty * params.eval_penalty.value
     }
 
@@ -2814,7 +2672,6 @@ impl TrackEvaluation {
             + (1. - 1. / (1. + self.reward))
             + self.early_finish_percent
             + self.distance_percent
-            + self.rewards_acquired_percent
             + self.autoencoder_loss)
             / 6.
     }
@@ -2995,7 +2852,7 @@ pub fn eval_nn(
                         break;
                     }
 
-                    if simulation.reward_path_processor.all_acquired(&params_sim) {
+                    if simulation.reward_path_processor.all_acquired() {
                         early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
                         break;
                     }
@@ -3019,10 +2876,7 @@ pub fn eval_nn(
                     reward: simulation.reward,
                     early_finish_percent,
                     distance_percent: simulation.reward_path_processor.distance_percent(),
-                    rewards_acquired_percent: simulation
-                        .reward_path_processor
-                        .rewards_acquired_percent(&params_sim),
-                    all_acquired: simulation.reward_path_processor.all_acquired(&params_sim),
+                    all_acquired: simulation.reward_path_processor.all_acquired(),
                     simple_physics: params_sim.simulation_simple_physics,
                     simple_physics_raw: other_params[0],
                     autoencoder_loss: nn_processor.get_autoencoder_loss(),
@@ -3790,7 +3644,7 @@ impl SimulationParameters {
     }
 }
 
-pub const RUN_EVOLUTION: bool = false;
+pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
 const PRINT: bool = true;
@@ -4122,7 +3976,7 @@ fn eval_tracks_dirs(
                 break;
             }
 
-            if simulation.reward_path_processor.all_acquired(&params_sim) {
+            if simulation.reward_path_processor.all_acquired() {
                 break;
             }
         }
@@ -4354,9 +4208,9 @@ pub fn evolution() {
     // params_sim.nn.pass_current_track = true;
     // params_sim.nn.pass_dirs_diff = true;
     // params_sim.nn.pass_next_size = 3;
-    params_sim.nn.use_dirs_autoencoder = true;
-    params_sim.nn.autoencoder_hidden_layers = vec![10, 10, 10];
-    params_sim.nn.autoencoder_exits = 5;
+    // params_sim.nn.use_dirs_autoencoder = true;
+    // params_sim.nn.autoencoder_hidden_layers = vec![10, 10, 10];
+    // params_sim.nn.autoencoder_exits = 5;
     params_sim.simulation_simple_physics = 1.0;
     // save_runs(vec![evolve_simple_physics(&params_sim, &params_phys, &random_input(&params_sim), 50, 100, 5)], "nn_autoencoder_best");
     save_runs(

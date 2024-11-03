@@ -1,5 +1,6 @@
 use crate::common::*;
 use crate::evolution::*;
+use crate::math::project_to_segment;
 use crate::nn::*;
 use crate::physics::*;
 use crate::storage::*;
@@ -382,15 +383,14 @@ impl eframe::App for TemplateApp {
                                 if ui.button("Print track").clicked() {
                                     println!();
                                     for storage in &self.points {
-                                        if storage.is_reward {
-                                            println!("rewards_from_points(vec![");
-                                        } else {
-                                            println!("walls_from_points(vec![");
-                                        }
+                                        println!(
+                                            "PointsStorage {{ is_reward: {}, points: vec![",
+                                            storage.is_reward
+                                        );
                                         for point in &storage.points {
                                             println!("    pos2({:.2}, {:.2}),", point.x, point.y);
                                         }
-                                        println!("].into_iter()),");
+                                        println!("]}},");
                                     }
                                     println!("----");
                                 }
@@ -410,25 +410,19 @@ impl eframe::App for TemplateApp {
                                     self.simulation.reward_path_processor.distance_percent() * 100.
                                 ));
                                 ui.label(format!(
-                                    "Current segment: {:.2}%",
+                                    "Current segment: {:.2}",
                                     self.simulation
                                         .reward_path_processor
                                         .get_current_segment_f32()
                                 ));
-                                ui.label(format!(
-                                    "Rewards percent: {:.2}%",
-                                    self.simulation
-                                        .reward_path_processor
-                                        .rewards_acquired_percent(&self.params_sim)
-                                        * 100.
-                                ));
+                                ui.label(format!("All acquired: {}", self.simulation.reward_path_processor.all_acquired()));
                                 ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
                                 ui.label(format!("Quota: {}", self.quota));
                                 ui.label(format!("Time: {}", self.simulation.time_passed));
                                 if self
                                     .simulation
                                     .reward_path_processor
-                                    .all_acquired(&self.params_sim)
+                                    .all_acquired()
                                     && self.finish_step == 0
                                 {
                                     self.finish_step = self.quota;
@@ -491,9 +485,9 @@ impl eframe::App for TemplateApp {
                                         let delta = pos_delta - pos;
                                         *point += delta;
                                         response.mark_changed();
-                                    } else {
+                                    } else if response.drag_started() {
                                         for (i, point) in storage.iter_mut().enumerate() {
-                                            if (*point - pos).length() < 30. {
+                                            if (*point - pos).length() < 30. * 2. {
                                                 self.drag_pos = Some(i);
                                                 ui.output_mut(|o| {
                                                     o.cursor_icon = egui::CursorIcon::Move
@@ -529,6 +523,19 @@ impl eframe::App for TemplateApp {
                                     }
                                     if let Some(to_remove) = to_remove {
                                         storage.remove(to_remove);
+                                    } else if storage.len() >= 2 {
+                                        let x = storage
+                                            .windows(2)
+                                            .enumerate()
+                                            .map(|(i, x)| {
+                                                let (a, b) = (x[0], x[1]);
+                                                let (res, t) = project_to_segment(pos, a, b);
+                                                (i, res, (pos - res).length(), t)
+                                            })
+                                            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+                                            .map(|x| x.0)
+                                            .unwrap();
+                                        storage.insert(x + 1, pos);
                                     }
                                 }
                             }

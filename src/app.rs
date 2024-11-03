@@ -1,10 +1,9 @@
-use crate::nn::*;
 use crate::common::*;
 use crate::evolution::*;
+use crate::nn::*;
 use crate::physics::*;
 use crate::storage::*;
 use egui::containers::Frame;
-use egui::*;
 use egui::pos2;
 use egui::vec2;
 use egui::Align2;
@@ -16,6 +15,7 @@ use egui::PointerButton;
 use egui::Shape;
 use egui::Stroke;
 use egui::Ui;
+use egui::*;
 use egui::{emath, Pos2, Rect, Sense, Vec2};
 use egui_plot::Corner;
 use egui_plot::Legend;
@@ -130,7 +130,7 @@ pub struct TemplateApp {
 impl Default for TemplateApp {
     fn default() -> Self {
         let mut params_sim = SimulationParameters::default();
-        
+
         params_sim.enable_all_tracks();
         params_sim.disable_track("straight_45");
         params_sim.eval_add_min_distance = false;
@@ -185,7 +185,11 @@ impl Default for TemplateApp {
                 &params_sim,
             ),
 
-            all_tracks: get_all_tracks().into_iter().filter(|x| x.0 != "straight_45").flat_map(|x| vec![x.clone(), mirror_horizontally_track2(x)]).collect(),
+            all_tracks: get_all_tracks()
+                .into_iter()
+                .filter(|x| x.0 != "straight_45")
+                .flat_map(|x| vec![x.clone(), mirror_horizontally_track2(x)])
+                .collect(),
             current_track: "complex".to_string(),
             current_track_id: 10,
 
@@ -212,8 +216,12 @@ impl TemplateApp {
     fn reset_car(&mut self) {
         self.simulation = CarSimulation::new(
             Default::default(),
-            points_storage_to_track(self.all_tracks[self.current_track_id].clone()).walls.clone(),
-            points_storage_to_track(self.all_tracks[self.current_track_id].clone()).rewards.clone(),
+            points_storage_to_track(self.all_tracks[self.current_track_id].clone())
+                .walls
+                .clone(),
+            points_storage_to_track(self.all_tracks[self.current_track_id].clone())
+                .rewards
+                .clone(),
             &self.params_sim,
         );
         self.trajectories.clear();
@@ -245,7 +253,8 @@ impl eframe::App for TemplateApp {
             }
             let track = points_storage_to_track(("edited".to_string(), self.points.clone()));
             self.simulation.walls = track.walls;
-            self.simulation.reward_path_processor = crate::evolution::RewardPathProcessor::new(track.rewards);
+            self.simulation.reward_path_processor =
+                crate::evolution::RewardPathProcessor::new(track.rewards);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -257,7 +266,14 @@ impl eframe::App for TemplateApp {
                             .show_ui(ui, |ui| {
                                 let mut to_reset = false;
                                 for (track_id, track) in self.all_tracks.iter().enumerate() {
-                                    if ui.selectable_value(&mut self.current_track, track.0.clone(), track.0.clone()).changed() {
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.current_track,
+                                            track.0.clone(),
+                                            track.0.clone(),
+                                        )
+                                        .changed()
+                                    {
                                         self.current_track_id = track_id;
                                         // self.nn_processor.set_current_track(track_id);
                                         self.nn_processor.set_current_track(0);
@@ -274,15 +290,21 @@ impl eframe::App for TemplateApp {
                                 if to_reset {
                                     self.reset_car();
                                 }
-                            }
-                        );
+                            });
 
                         if ui.button("Mutate car").clicked() {
                             self.reset_car();
                             self.simulation.car = mutate_car(Default::default(), &self.params_sim);
                         }
 
-                        if ui.button(if self.override_nn { "Let NN drive!" } else { "Let me drive!" }).clicked() {
+                        if ui
+                            .button(if self.override_nn {
+                                "Let NN drive!"
+                            } else {
+                                "Let me drive!"
+                            })
+                            .clicked()
+                        {
                             self.override_nn = !self.override_nn;
                         }
 
@@ -294,26 +316,41 @@ impl eframe::App for TemplateApp {
                                     ui.text_edit_multiline(&mut self.current_nn);
                                 });
                                 if ui.button("Set NN").clicked() {
-                                    let numbers: Vec<f32> = match serde_json::from_str(&self.current_nn) {
-                                        Ok(ok) => ok,
-                                        Err(err) => {
-                                            dbg!(err);
-                                            Default::default()
-                                        }
-                                    };
+                                    let numbers: Vec<f32> =
+                                        match serde_json::from_str(&self.current_nn) {
+                                            Ok(ok) => ok,
+                                            Err(err) => {
+                                                dbg!(err);
+                                                Default::default()
+                                            }
+                                        };
                                     let nn_len = self.params_sim.nn.get_nns_len();
                                     if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
                                         self.current_nn.clear();
-                                        self.params_sim = patch_params_sim(&numbers, &self.params_sim);
+                                        self.params_sim =
+                                            patch_params_sim(&numbers, &self.params_sim);
                                         // let true_params_sim = SimulationParameters::true_metric(&self.params_sim);
-                                        let true_evals = eval_nn(&numbers, &self.params_phys, &self.params_sim);
+                                        let true_evals =
+                                            eval_nn(&numbers, &self.params_phys, &self.params_sim);
                                         print_evals(&true_evals);
-                                        println!("Cost: {}", sum_evals(&true_evals, &self.params_sim));
+                                        println!(
+                                            "Cost: {}",
+                                            sum_evals(&true_evals, &self.params_sim)
+                                        );
                                         println!("-----");
-                                        self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, /*self.current_track_id*/ 0);
+                                        self.nn_processor = NnProcessor::new(
+                                            &numbers[..nn_len],
+                                            self.params_sim.nn.clone(),
+                                            self.params_sim.simulation_simple_physics,
+                                            /*self.current_track_id*/ 0,
+                                        );
                                         self.reset_car();
                                     } else {
-                                        println!("Wrong size: expected {}, got: {}", nn_len + OTHER_PARAMS_SIZE, numbers.len());
+                                        println!(
+                                            "Wrong size: expected {}, got: {}",
+                                            nn_len + OTHER_PARAMS_SIZE,
+                                            numbers.len()
+                                        );
                                     }
                                 }
                             });
@@ -374,7 +411,9 @@ impl eframe::App for TemplateApp {
                                 ));
                                 ui.label(format!(
                                     "Current segment: {:.2}%",
-                                    self.simulation.reward_path_processor.get_current_segment_f32()
+                                    self.simulation
+                                        .reward_path_processor
+                                        .get_current_segment_f32()
                                 ));
                                 ui.label(format!(
                                     "Rewards percent: {:.2}%",
@@ -386,7 +425,12 @@ impl eframe::App for TemplateApp {
                                 ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
                                 ui.label(format!("Quota: {}", self.quota));
                                 ui.label(format!("Time: {}", self.simulation.time_passed));
-                                if self.simulation.reward_path_processor.all_acquired(&self.params_sim) && self.finish_step == 0 {
+                                if self
+                                    .simulation
+                                    .reward_path_processor
+                                    .all_acquired(&self.params_sim)
+                                    && self.finish_step == 0
+                                {
                                     self.finish_step = self.quota;
                                 }
                                 if self.finish_step != 0 {
@@ -471,8 +515,7 @@ impl eframe::App for TemplateApp {
 
                             if response.clicked_by(PointerButton::Primary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
-                                    storage
-                                        .push(from_screen.transform_pos(pos_screen));
+                                    storage.push(from_screen.transform_pos(pos_screen));
                                 }
                             } else if response.clicked_by(PointerButton::Secondary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
@@ -553,215 +596,232 @@ impl eframe::App for TemplateApp {
                         self.quota += 1;
 
                         for simulation_i in 0..self.params_intr.simulations_per_frame {
-                        self.simulation.step(
-                            &self.params_phys,
-                            &self.params_sim,
-                            &mut |origin, dir_pos, t, t2| {
-                                if simulation_i == 0 {
-                                    painter.add(Shape::line(
-                                        vec![
-                                            to_screen.transform_pos(origin),
-                                            to_screen.transform_pos(origin + (dir_pos - origin) * t),
-                                        ],
-                                        Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
-                                    ));
-                                    if self.params_sim.nn.pass_dirs_second_layer {
-                                        painter.add(Shape::circle_filled(
-                                            to_screen.transform_pos(origin + (dir_pos - origin) * t),
-                                            3.,
-                                            Color32::from_rgb(0, 0, 255),
+                            self.simulation.step(
+                                &self.params_phys,
+                                &self.params_sim,
+                                &mut |origin, dir_pos, t, t2| {
+                                    if simulation_i == 0 {
+                                        painter.add(Shape::line(
+                                            vec![
+                                                to_screen.transform_pos(origin),
+                                                to_screen
+                                                    .transform_pos(origin + (dir_pos - origin) * t),
+                                            ],
+                                            Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
                                         ));
-                                        if let Some(t2) = t2 {
-                                            painter.add(Shape::line(
-                                                vec![
-                                                    to_screen.transform_pos(origin + (dir_pos - origin) * t),
-                                                    to_screen.transform_pos(origin + (dir_pos - origin) * t2),
-                                                ],
-                                                Stroke::new(1.0, Color32::from_rgb(0, 0, 255)),
-                                            )); 
+                                        if self.params_sim.nn.pass_dirs_second_layer {
                                             painter.add(Shape::circle_filled(
-                                                to_screen.transform_pos(origin + (dir_pos - origin) * t2),
-                                                2.,
-                                                Color32::from_rgb(0, 0, 128),
+                                                to_screen
+                                                    .transform_pos(origin + (dir_pos - origin) * t),
+                                                3.,
+                                                Color32::from_rgb(0, 0, 255),
                                             ));
+                                            if let Some(t2) = t2 {
+                                                painter.add(Shape::line(
+                                                    vec![
+                                                        to_screen.transform_pos(
+                                                            origin + (dir_pos - origin) * t,
+                                                        ),
+                                                        to_screen.transform_pos(
+                                                            origin + (dir_pos - origin) * t2,
+                                                        ),
+                                                    ],
+                                                    Stroke::new(1.0, Color32::from_rgb(0, 0, 255)),
+                                                ));
+                                                painter.add(Shape::circle_filled(
+                                                    to_screen.transform_pos(
+                                                        origin + (dir_pos - origin) * t2,
+                                                    ),
+                                                    2.,
+                                                    Color32::from_rgb(0, 0, 128),
+                                                ));
+                                            }
                                         }
                                     }
-                                }
-                            },
-                            &mut |time_passed, distance_percent, dpenalty, dirs, dirs_second_layer, internals, current_segment_f32| {
-                                self.graphs.add_point(
-                                    "input",
-                                    "time_passed",
-                                    time_passed,
-                                    Color32::YELLOW,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "distance_percent",
-                                    distance_percent,
-                                    Color32::KHAKI,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "dpenalty",
-                                    dpenalty,
-                                    Color32::DARK_RED,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "acceleration value",
-                                    internals.local_acceleration.length(),
-                                    Color32::BLUE,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "acceleration angle",
-                                    internals.acceleration_angle(),
-                                    Color32::BLUE,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "torque",
-                                    internals.angle_acceleration,
-                                    Color32::RED,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "speed value",
-                                    internals.local_speed.length(),
-                                    Color32::GREEN,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "speed angle",
-                                    internals.speed_angle(),
-                                    Color32::GREEN,
-                                    &self.params_intr,
-                                );
-                                self.graphs.add_point(
-                                    "input",
-                                    "wheel angle",
-                                    internals.wheel_angle,
-                                    Color32::GREEN,
-                                    &self.params_intr,
-                                );
+                                },
+                                &mut |time_passed,
+                                      distance_percent,
+                                      dpenalty,
+                                      dirs,
+                                      dirs_second_layer,
+                                      internals,
+                                      current_segment_f32| {
+                                    self.graphs.add_point(
+                                        "input",
+                                        "time_passed",
+                                        time_passed,
+                                        Color32::YELLOW,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "distance_percent",
+                                        distance_percent,
+                                        Color32::KHAKI,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "dpenalty",
+                                        dpenalty,
+                                        Color32::DARK_RED,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "acceleration value",
+                                        internals.local_acceleration.length(),
+                                        Color32::BLUE,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "acceleration angle",
+                                        internals.acceleration_angle(),
+                                        Color32::BLUE,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "torque",
+                                        internals.angle_acceleration,
+                                        Color32::RED,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "speed value",
+                                        internals.local_speed.length(),
+                                        Color32::GREEN,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "speed angle",
+                                        internals.speed_angle(),
+                                        Color32::GREEN,
+                                        &self.params_intr,
+                                    );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "wheel angle",
+                                        internals.wheel_angle,
+                                        Color32::GREEN,
+                                        &self.params_intr,
+                                    );
 
-                                self.graphs.add_point(
-                                    "input",
-                                    "angle speed",
-                                    internals.angle_speed,
-                                    Color32::GREEN,
-                                    &self.params_intr,
-                                );
+                                    self.graphs.add_point(
+                                        "input",
+                                        "angle speed",
+                                        internals.angle_speed,
+                                        Color32::GREEN,
+                                        &self.params_intr,
+                                    );
 
-                                if self.params_intr.show_dirs {
-                                    for (pos, dir) in dirs.iter().enumerate() {
+                                    if self.params_intr.show_dirs {
+                                        for (pos, dir) in dirs.iter().enumerate() {
+                                            self.graphs.add_point(
+                                                "input",
+                                                format!("z dir {pos}"),
+                                                dir.unwrap_or(-1.),
+                                                Color32::BLACK,
+                                                &self.params_intr,
+                                            );
+                                        }
+                                    }
+
+                                    if self.override_nn {
+                                        CarInput {
+                                            brake: keys_down.contains(&egui::Key::Space) as usize
+                                                as f32,
+                                            acceleration: if keys_down.contains(&egui::Key::ArrowUp)
+                                            {
+                                                1.0
+                                            } else if keys_down.contains(&egui::Key::ArrowDown) {
+                                                -1.0
+                                            } else {
+                                                0.0
+                                            },
+                                            remove_turn: (!(keys_down
+                                                .contains(&egui::Key::ArrowLeft)
+                                                || keys_down.contains(&egui::Key::ArrowRight)))
+                                                as usize
+                                                as f32,
+                                            turn: if keys_down.contains(&egui::Key::ArrowLeft) {
+                                                1.0
+                                            } else if keys_down.contains(&egui::Key::ArrowRight) {
+                                                -1.0
+                                            } else {
+                                                0.0
+                                            },
+                                        }
+                                    } else {
+                                        let result = self.nn_processor.process(
+                                            time_passed,
+                                            distance_percent,
+                                            dpenalty,
+                                            dirs,
+                                            dirs_second_layer,
+                                            current_segment_f32,
+                                            internals,
+                                            &self.params_sim,
+                                        );
                                         self.graphs.add_point(
-                                            "input",
-                                            format!("z dir {pos}"),
-                                            dir.unwrap_or(-1.),
-                                            Color32::BLACK,
+                                            "output",
+                                            "brake",
+                                            result.brake as usize as f32,
+                                            Color32::BLUE,
                                             &self.params_intr,
                                         );
+                                        self.graphs.add_point(
+                                            "output",
+                                            "acceleration",
+                                            result.acceleration,
+                                            Color32::BLUE,
+                                            &self.params_intr,
+                                        );
+                                        self.graphs.add_point(
+                                            "output",
+                                            "remove_turn",
+                                            result.remove_turn as usize as f32,
+                                            Color32::GREEN,
+                                            &self.params_intr,
+                                        );
+                                        self.graphs.add_point(
+                                            "output",
+                                            "turn",
+                                            result.turn,
+                                            Color32::GREEN,
+                                            &self.params_intr,
+                                        );
+                                        result
                                     }
-                                }
-
-                                if self.override_nn {
-                                    CarInput {
-                                        brake: keys_down.contains(&egui::Key::Space) as usize
-                                            as f32,
-                                        acceleration: if keys_down.contains(&egui::Key::ArrowUp) {
-                                            1.0
-                                        } else if keys_down.contains(&egui::Key::ArrowDown) {
-                                            -1.0
-                                        } else {
-                                            0.0
-                                        },
-                                        remove_turn: (!(keys_down.contains(&egui::Key::ArrowLeft)
-                                            || keys_down.contains(&egui::Key::ArrowRight)))
-                                            as usize
-                                            as f32,
-                                        turn: if keys_down.contains(&egui::Key::ArrowLeft) {
-                                            1.0
-                                        } else if keys_down.contains(&egui::Key::ArrowRight) {
-                                            -1.0
-                                        } else {
-                                            0.0
-                                        },
+                                },
+                                &mut |i, pos, value| {
+                                    self.drifts[i].process_point(
+                                        pos.to_pos2(),
+                                        value > self.params_intr.drift_starts_at,
+                                    );
+                                },
+                                &mut |car| {
+                                    if simulation_i == 0 {
+                                        car.draw_forces(
+                                            &painter,
+                                            &self.params_intr,
+                                            &self.params_phys,
+                                            &to_screen,
+                                        );
                                     }
-                                } else {
-                                    let result = self.nn_processor.process(
-                                        time_passed,
-                                        distance_percent,
-                                        dpenalty,
-                                        dirs,
-                                        dirs_second_layer,
-                                        current_segment_f32,
-                                        internals,
-                                        &self.params_sim,
-                                    );
-                                    self.graphs.add_point(
-                                        "output",
-                                        "brake",
-                                        result.brake as usize as f32,
-                                        Color32::BLUE,
-                                        &self.params_intr,
-                                    );
-                                    self.graphs.add_point(
-                                        "output",
-                                        "acceleration",
-                                        result.acceleration,
-                                        Color32::BLUE,
-                                        &self.params_intr,
-                                    );
-                                    self.graphs.add_point(
-                                        "output",
-                                        "remove_turn",
-                                        result.remove_turn as usize as f32,
-                                        Color32::GREEN,
-                                        &self.params_intr,
-                                    );
-                                    self.graphs.add_point(
-                                        "output",
-                                        "turn",
-                                        result.turn,
-                                        Color32::GREEN,
-                                        &self.params_intr,
-                                    );
-                                    result
-                                }
-                            },
-                            &mut |i, pos, value| {
-                                self.drifts[i].process_point(
-                                    pos.to_pos2(),
-                                    value > self.params_intr.drift_starts_at,
-                                );
-                            },
-                            &mut |car| {
-                                if simulation_i == 0 {
-                                    car.draw_forces(
-                                        &painter,
-                                        &self.params_intr,
-                                        &self.params_phys,
-                                        &to_screen,
-                                    );
-                                }
 
-                                self.trajectories.push_back(car.get_center());
-                                self.points_count += 1;
-                                if self.points_count > self.params_intr.graph_points_size_limit {
-                                    self.trajectories.pop_front();
-                                    self.points_count -= 1;
-                                }
-                            },
-                        );
+                                    self.trajectories.push_back(car.get_center());
+                                    self.points_count += 1;
+                                    if self.points_count > self.params_intr.graph_points_size_limit
+                                    {
+                                        self.trajectories.pop_front();
+                                        self.points_count -= 1;
+                                    }
+                                },
+                            );
                         }
                     });
                 });
@@ -769,17 +829,18 @@ impl eframe::App for TemplateApp {
                 CollapsingHeader::new("Graphs")
                     .default_open(false)
                     .show(ui, |ui| {
-                        let create_plot = |name: &str, group_name: &str, params: &InterfaceParameters| {
-                            Plot::new(format!("items_demo {} {}", name, group_name))
-                                .legend(Legend::default().position(Corner::RightTop))
-                                .show_x(false)
-                                .show_y(false)
-                                .allow_zoom([false, false])
-                                .allow_scroll([false, false])
-                                .allow_boxed_zoom(false)
-                                .width(params.plot_size)
-                                .height(params.plot_size)
-                        };
+                        let create_plot =
+                            |name: &str, group_name: &str, params: &InterfaceParameters| {
+                                Plot::new(format!("items_demo {} {}", name, group_name))
+                                    .legend(Legend::default().position(Corner::RightTop))
+                                    .show_x(false)
+                                    .show_y(false)
+                                    .allow_zoom([false, false])
+                                    .allow_scroll([false, false])
+                                    .allow_boxed_zoom(false)
+                                    .width(params.plot_size)
+                                    .height(params.plot_size)
+                            };
                         for (group_name, graphs) in self.graphs.points.iter() {
                             ui.horizontal_wrapped(|ui| {
                                 for (name, (points, color)) in graphs {
@@ -792,10 +853,11 @@ impl eframe::App for TemplateApp {
                                             create_plot(name, group_name, &self.params_intr).show(
                                                 ui,
                                                 |plot_ui| {
-                                                    let line =
-                                                        Line::new(PlotPoints::from_iter(points.clone()))
-                                                            .fill(0.)
-                                                            .color(*color);
+                                                    let line = Line::new(PlotPoints::from_iter(
+                                                        points.clone(),
+                                                    ))
+                                                    .fill(0.)
+                                                    .color(*color);
                                                     plot_ui.line(line.name(name));
                                                 },
                                             );

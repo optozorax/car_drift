@@ -169,10 +169,7 @@ impl InterfaceParameters {
         ui.end_row();
 
         ui.label("Simulations per frame:");
-        ui.add(
-            Slider::new(&mut self.simulations_per_frame, 1..=10)
-                .clamp_to_range(true)
-        );
+        ui.add(Slider::new(&mut self.simulations_per_frame, 1..=10).clamp_to_range(true));
         ui.end_row();
     }
 

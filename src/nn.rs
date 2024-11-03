@@ -1,8 +1,8 @@
-use serde::Deserialize;
-use serde::Serialize;
 use crate::common::pairs;
 use rand::prelude::SliceRandom;
 use rand::Rng;
+use serde::Deserialize;
+use serde::Serialize;
 
 pub fn mul_matrix(
     input: &[f32],
@@ -41,7 +41,11 @@ pub fn relu3(x: f32) -> f32 {
 }
 
 pub fn relu4(x: f32) -> f32 {
-    if x > 0. { x } else { x * 0.1 }
+    if x > 0. {
+        x
+    } else {
+        x * 0.1
+    }
 }
 
 fn activation(x: f32) -> f32 {

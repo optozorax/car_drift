@@ -506,11 +506,7 @@ impl Car {
 
             total_force *= traction_per_wheel;
 
-            self.apply_force(
-                self.wheel_pos(wheel),
-                total_force,
-                params,
-            );
+            self.apply_force(self.wheel_pos(wheel), total_force, params);
         }
 
         std::mem::swap(&mut wheels_temp, &mut self.wheels);
@@ -585,15 +581,9 @@ impl Car {
         if input.remove_turn > 0. {
             self.remove_turns(input.remove_turn, params);
         } else if input.turn > 0. {
-            self.turn_left(
-                input.turn.abs(),
-                params,
-            );
+            self.turn_left(input.turn.abs(), params);
         } else if input.turn < 0. {
-            self.turn_right(
-                input.turn.abs(),
-                params,
-            );
+            self.turn_right(input.turn.abs(), params);
         }
 
         self.update_cache();
@@ -613,8 +603,7 @@ impl Car {
 
     pub fn brake(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.up_wheels {
-            self.wheels[*pos].action =
-                WheelAction::Braking(ratio);
+            self.wheels[*pos].action = WheelAction::Braking(ratio);
         }
     }
 
@@ -632,8 +621,7 @@ impl Car {
 
     pub fn remove_turns(&mut self, ratio: f32, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
-            self.wheels[*pos].remove_turns =
-                params.wheel_turn_per_time * 5. * ratio;
+            self.wheels[*pos].remove_turns = params.wheel_turn_per_time * 5. * ratio;
         }
     }
 

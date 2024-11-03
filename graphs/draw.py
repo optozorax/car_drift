@@ -781,33 +781,39 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     disable_percentiles=True,
 # )
 
-# draw_graph(
-#     [
-#         {
-#             "data": read_json_file("./nn_restart_sm.json"),
-#             "name": "just restart",
-#             "alpha": 0.5,
-#             "color": colors[0],
-#         },
-#         {
-#             "data": read_json_file("./nn_restart_neuron_sm.json"),
-#             "name": "restart with new neuron",
-#             "alpha": 0.5,
-#             "color": colors[1],
-#         },
-#         {
-#             "data": read_json_file("./nn_restart_layer_sm.json"),
-#             "name": "restart with new layer",
-#             "alpha": 0.5,
-#             "color": colors[2],
-#         },
-#     ],
-#     "Different approaches to restart a evolution",
-#     "_restart.png",
-#     skip_individuals=True,
-#     only_complex_track=True,
-#     disable_percentiles=True,
-# )
+draw_graph(
+    [
+        {
+            "data": read_json_file("./nn_restart_sm_relu4.json"),
+            "name": "just restart",
+            "alpha": 0.5,
+            "color": colors[0],
+        },
+        {
+            "data": read_json_file("./nn_restart_neuron_sm_relu4.json"),
+            "name": "restart with new neuron",
+            "alpha": 0.5,
+            "color": colors[1],
+        },
+        {
+            "data": read_json_file("./nn_restart_layer_sm_relu4.json"),
+            "name": "restart with new layer",
+            "alpha": 0.5,
+            "color": colors[2],
+        },
+        {
+            "data": read_json_file("./nn_restart_neuron_5_sm_relu4.json"),
+            "name": "restart with 5 new neurons",
+            "alpha": 0.5,
+            "color": colors[3],
+        },
+    ],
+    "Different approaches to restart a evolution",
+    "_restart.png",
+    skip_individuals=True,
+    only_complex_track=True,
+    disable_percentiles=True,
+)
 
 # draw_graph(
 #     [
@@ -940,7 +946,6 @@ draw_graph(
     "simple_test_all_physics.png",
     skip_individuals=True,
 )
-
 
 # draw_graph(
 #     [

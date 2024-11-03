@@ -1,3 +1,5 @@
+use serde::Deserialize;
+use serde::Serialize;
 use crate::common::pairs;
 use rand::prelude::SliceRandom;
 use rand::Rng;
@@ -34,10 +36,21 @@ pub fn relu2(x: f32) -> f32 {
     if x > 0. { x } else { x * 0.1 }.clamp(-1., 10.)
 }
 
+pub fn relu3(x: f32) -> f32 {
+    x.max(0.)
+}
+
+pub fn relu4(x: f32) -> f32 {
+    if x > 0. { x } else { x * 0.1 }
+}
+
 fn activation(x: f32) -> f32 {
     // sigmoid(x)
     // relu1(x)
-    relu2(x)
+    // relu2(x)
+    relu3(x)
+    // relu4(x)
+    // sqrt_sigmoid(x) * 3.
 }
 
 fn activation_vector(output: &mut [f32]) {
@@ -183,7 +196,7 @@ impl NeuralNetwork {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Layer {
     input_size: usize,
     output_size: usize,
@@ -191,9 +204,9 @@ pub struct Layer {
     bias: Vec<f32>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NeuralNetworkUnoptimized {
-    layers: Vec<Layer>,
+    pub layers: Vec<Layer>,
 }
 
 impl NeuralNetworkUnoptimized {
@@ -314,6 +327,14 @@ impl NeuralNetworkUnoptimized {
             for row in &mut next_layer.matrix {
                 row.push(0.0);
             }
+        }
+    }
+
+    pub fn add_input_neuron(&mut self) {
+        let layer = &mut self.layers[0];
+        layer.input_size += 1;
+        for line in &mut layer.matrix {
+            line.push(0.);
         }
     }
 

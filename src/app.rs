@@ -81,51 +81,6 @@ impl Graphs {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
-struct PosInStorage(Pos2);
-
-impl PosInStorage {
-    fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
-        egui::Grid::new(data_id.with("wall_grid"))
-            .num_columns(2)
-            .spacing([40.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                ui.label("Pos X:");
-                ui.add(
-                    DragValue::new(&mut self.0.x)
-                        .speed(5.0)
-                        .min_decimals(0)
-                        .max_decimals(0),
-                );
-                ui.end_row();
-
-                ui.label("Pos Y:");
-                ui.add(
-                    DragValue::new(&mut self.0.y)
-                        .speed(5.0)
-                        .min_decimals(0)
-                        .max_decimals(0),
-                );
-                ui.end_row();
-            });
-    }
-}
-
-#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
-struct PointsStorage {
-    pub is_reward: bool,
-    pub points: Vec<PosInStorage>,
-}
-
-impl PointsStorage {
-    fn egui(&mut self, ui: &mut Ui, data_id: egui::Id) {
-        ui.selectable_value(&mut self.is_reward, false, "Walls");
-        ui.selectable_value(&mut self.is_reward, true, "Rewards");
-        egui_array_inner(&mut self.points, ui, data_id, PosInStorage::egui, false);
-    }
-}
-
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TemplateApp {
@@ -146,6 +101,7 @@ pub struct TemplateApp {
     current_edit: usize,
     offset: Pos2,
     drag_pos: Option<usize>,
+    enable_edit_track: bool,
 
     #[serde(skip)]
     rng: StdRng,
@@ -161,12 +117,14 @@ pub struct TemplateApp {
     quota: usize,
 
     #[serde(skip)]
-    all_tracks: Vec<Track>,
+    all_tracks: Vec<(String, Vec<PointsStorage>)>,
 
     current_track: String,
     current_track_id: usize,
 
     current_nn: String,
+
+    finish_step: usize,
 }
 
 impl Default for TemplateApp {
@@ -183,6 +141,7 @@ impl Default for TemplateApp {
         params_sim.nn.hidden_layers = vec![10];
         params_sim.nn.inv_distance_coef = 30.;
         params_sim.nn.pass_current_track = true;
+        params_sim.nn.pass_current_segment = true;
         params_sim.nn.pass_dirs_diff = true;
         params_sim.nn.pass_internals = true;
         params_sim.nn.pass_next_size = 3;
@@ -207,10 +166,11 @@ impl Default for TemplateApp {
             params_phys: Default::default(),
             params_sim: params_sim.clone(),
 
-            points: Vec::default(),
+            points: track_complex().1,
             current_edit: 0,
             offset: pos2(0., 0.),
             drag_pos: None,
+            enable_edit_track: false,
 
             override_nn: true,
 
@@ -220,16 +180,18 @@ impl Default for TemplateApp {
 
             simulation: CarSimulation::new(
                 Default::default(),
-                track_complex().walls,
-                track_complex().rewards,
+                points_storage_to_track(track_complex()).walls,
+                points_storage_to_track(track_complex()).rewards,
                 &params_sim,
             ),
 
-            all_tracks: get_all_tracks().into_iter().filter(|x| x.name != "straight_45").flat_map(|x| vec![x.clone(), mirror_horizontally(x)]).collect(),
+            all_tracks: get_all_tracks().into_iter().filter(|x| x.0 != "straight_45").flat_map(|x| vec![x.clone(), mirror_horizontally_track2(x)]).collect(),
             current_track: "complex".to_string(),
             current_track_id: 10,
 
             current_nn: Default::default(),
+
+            finish_step: 0,
         }
     }
 }
@@ -240,7 +202,7 @@ impl TemplateApp {
         if let Some(storage) = cc.storage {
             let stored: TemplateApp =
                 eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
-            result.points = stored.points;
+            // result.points = stored.points;
         }
         result
     }
@@ -250,8 +212,8 @@ impl TemplateApp {
     fn reset_car(&mut self) {
         self.simulation = CarSimulation::new(
             Default::default(),
-            self.all_tracks[self.current_track_id].walls.clone(),
-            self.all_tracks[self.current_track_id].rewards.clone(),
+            points_storage_to_track(self.all_tracks[self.current_track_id].clone()).walls.clone(),
+            points_storage_to_track(self.all_tracks[self.current_track_id].clone()).rewards.clone(),
             &self.params_sim,
         );
         self.trajectories.clear();
@@ -262,6 +224,7 @@ impl TemplateApp {
         self.drag_pos = None;
         self.quota = 0;
         self.nn_processor.reset();
+        self.finish_step = 0;
     }
 }
 
@@ -276,25 +239,14 @@ impl eframe::App for TemplateApp {
         let escape_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let wheel = ctx.input(|i| i.smooth_scroll_delta);
 
-        // if self.current_edit >= self.points.len() {
-        //     self.current_edit = self.points.len() - 1;
-        // }
-
-        let mut walls: Vec<Wall> = Default::default();
-        let mut rewards: Vec<Reward> = Default::default();
-        for elem in &self.points {
-            if elem.is_reward {
-                rewards.extend(rewards_from_points(
-                    elem.points.iter().map(|PosInStorage(a)| *a),
-                ));
-            } else {
-                walls.extend(walls_from_points(
-                    elem.points.iter().map(|PosInStorage(a)| *a),
-                ));
+        if self.enable_edit_track {
+            if self.current_edit >= self.points.len() {
+                self.current_edit = self.points.len() - 1;
             }
+            let track = points_storage_to_track(("edited".to_string(), self.points.clone()));
+            self.simulation.walls = track.walls;
+            self.simulation.reward_path_processor = crate::evolution::RewardPathProcessor::new(track.rewards);
         }
-        // self.simulation.walls = walls;
-        // self.simulation.reward_path_processor = crate::evolution::RewardPathProcessor::new(rewards);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -305,15 +257,17 @@ impl eframe::App for TemplateApp {
                             .show_ui(ui, |ui| {
                                 let mut to_reset = false;
                                 for (track_id, track) in self.all_tracks.iter().enumerate() {
-                                    if ui.selectable_value(&mut self.current_track, track.name.clone(), track.name.clone()).changed() {
+                                    if ui.selectable_value(&mut self.current_track, track.0.clone(), track.0.clone()).changed() {
                                         self.current_track_id = track_id;
-                                        self.nn_processor.set_current_track(track_id);
+                                        // self.nn_processor.set_current_track(track_id);
+                                        self.nn_processor.set_current_track(0);
                                         self.simulation = CarSimulation::new(
                                             Default::default(),
-                                            track.walls.clone(),
-                                            track.rewards.clone(),
+                                            points_storage_to_track(track.clone()).walls.clone(),
+                                            points_storage_to_track(track.clone()).rewards.clone(),
                                             &self.params_sim,
                                         );
+                                        self.points = track.1.clone();
                                         to_reset = true;
                                     }
                                 }
@@ -347,7 +301,6 @@ impl eframe::App for TemplateApp {
                                             Default::default()
                                         }
                                     };
-                                    let nn_sizes = self.params_sim.nn.get_nn_sizes();
                                     let nn_len = self.params_sim.nn.get_nns_len();
                                     if numbers.len() == nn_len + OTHER_PARAMS_SIZE {
                                         self.current_nn.clear();
@@ -357,10 +310,10 @@ impl eframe::App for TemplateApp {
                                         print_evals(&true_evals);
                                         println!("Cost: {}", sum_evals(&true_evals, &self.params_sim));
                                         println!("-----");
-                                        self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, self.current_track_id);
+                                        self.nn_processor = NnProcessor::new(&numbers[..nn_len], self.params_sim.nn.clone(), self.params_sim.simulation_simple_physics, /*self.current_track_id*/ 0);
                                         self.reset_car();
                                     } else {
-                                        println!("Wrong size: expected {nn_len}, got: {}", numbers.len());
+                                        println!("Wrong size: expected {}, got: {}", nn_len + OTHER_PARAMS_SIZE, numbers.len());
                                     }
                                 }
                             });
@@ -384,6 +337,62 @@ impl eframe::App for TemplateApp {
                         // self.params_phys = self
                         //     .params_sim
                         //     .patch_physics_parameters(self.params_phys.clone());
+
+                        CollapsingHeader::new("Edit track")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.checkbox(&mut self.enable_edit_track, " Enable editing");
+                                if ui.button("Print track").clicked() {
+                                    println!();
+                                    for storage in &self.points {
+                                        if storage.is_reward {
+                                            println!("rewards_from_points(vec![");
+                                        } else {
+                                            println!("walls_from_points(vec![");
+                                        }
+                                        for point in &storage.points {
+                                            println!("    pos2({:.2}, {:.2}),", point.x, point.y);
+                                        }
+                                        println!("].into_iter()),");
+                                    }
+                                    println!("----");
+                                }
+
+                                ui.add(egui::Slider::new(
+                                    &mut self.current_edit,
+                                    0..=self.points.len().saturating_sub(1),
+                                ));
+                                egui_array(&mut self.points, "Points", ui, PointsStorage::egui);
+                            });
+
+                        CollapsingHeader::new("Data")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(format!(
+                                    "Distance: {:.2}%",
+                                    self.simulation.reward_path_processor.distance_percent() * 100.
+                                ));
+                                ui.label(format!(
+                                    "Current segment: {:.2}%",
+                                    self.simulation.reward_path_processor.get_current_segment_f32()
+                                ));
+                                ui.label(format!(
+                                    "Rewards percent: {:.2}%",
+                                    self.simulation
+                                        .reward_path_processor
+                                        .rewards_acquired_percent(&self.params_sim)
+                                        * 100.
+                                ));
+                                ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
+                                ui.label(format!("Quota: {}", self.quota));
+                                ui.label(format!("Time: {}", self.simulation.time_passed));
+                                if self.simulation.reward_path_processor.all_acquired(&self.params_sim) && self.finish_step == 0 {
+                                    self.finish_step = self.quota;
+                                }
+                                if self.finish_step != 0 {
+                                    ui.label(format!("Finished at: {}", self.finish_step));
+                                }
+                            });
                     });
                     Frame::canvas(ui.style()).show(ui, |ui| {
                         let (mut response, painter) = ui.allocate_painter(
@@ -436,11 +445,11 @@ impl eframe::App for TemplateApp {
                                         let pos_delta =
                                             from_screen.transform_pos(pos_screen + delta_screen);
                                         let delta = pos_delta - pos;
-                                        point.0 += delta;
+                                        *point += delta;
                                         response.mark_changed();
                                     } else {
                                         for (i, point) in storage.iter_mut().enumerate() {
-                                            if (point.0 - pos).length() < 30. {
+                                            if (*point - pos).length() < 30. {
                                                 self.drag_pos = Some(i);
                                                 ui.output_mut(|o| {
                                                     o.cursor_icon = egui::CursorIcon::Move
@@ -449,7 +458,7 @@ impl eframe::App for TemplateApp {
                                                 let pos_delta = from_screen
                                                     .transform_pos(pos_screen + delta_screen);
                                                 let delta = pos_delta - pos;
-                                                point.0 += delta;
+                                                *point += delta;
                                                 response.mark_changed();
                                                 break;
                                             }
@@ -463,14 +472,14 @@ impl eframe::App for TemplateApp {
                             if response.clicked_by(PointerButton::Primary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
                                     storage
-                                        .push(PosInStorage(from_screen.transform_pos(pos_screen)));
+                                        .push(from_screen.transform_pos(pos_screen));
                                 }
                             } else if response.clicked_by(PointerButton::Secondary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
                                     let pos = from_screen.transform_pos(pos_screen);
                                     let mut to_remove: Option<usize> = None;
                                     for (i, point) in storage.iter().enumerate() {
-                                        if (point.0 - pos).length() < 30. {
+                                        if (*point - pos).length() < 30. {
                                             to_remove = Some(i);
                                             break;
                                         }
@@ -482,37 +491,39 @@ impl eframe::App for TemplateApp {
                             }
                         }
 
-                        for (storage_pos, storage) in self.points.iter().enumerate() {
-                            for point in &storage.points {
-                                painter.add(Shape::circle_stroke(
-                                    to_screen.transform_pos(point.0),
-                                    (to_screen.transform_pos(point.0)
-                                        - to_screen.transform_pos(point.0 + vec2(30., 0.)))
-                                    .length(),
-                                    Stroke::new(2.0, Color32::from_rgb(0, 0, 0)),
+                        if self.enable_edit_track {
+                            for (storage_pos, storage) in self.points.iter().enumerate() {
+                                for point in &storage.points {
+                                    painter.add(Shape::circle_stroke(
+                                        to_screen.transform_pos(*point),
+                                        (to_screen.transform_pos(*point)
+                                            - to_screen.transform_pos(*point + vec2(30., 0.)))
+                                        .length(),
+                                        Stroke::new(2.0, Color32::from_rgb(0, 0, 0)),
+                                    ));
+                                }
+
+                                painter.add(Shape::line(
+                                    storage
+                                        .points
+                                        .iter()
+                                        .map(|p| to_screen.transform_pos(*p))
+                                        .collect(),
+                                    Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
                                 ));
-                            }
 
-                            painter.add(Shape::line(
-                                storage
-                                    .points
-                                    .iter()
-                                    .map(|p| to_screen.transform_pos(p.0))
-                                    .collect(),
-                                Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
-                            ));
-
-                            for (pos, point) in storage.points.iter().enumerate() {
-                                painter.add(painter.fonts(|f| {
-                                    Shape::text(
-                                        f,
-                                        to_screen.transform_pos(point.0),
-                                        Align2::CENTER_CENTER,
-                                        format!("{storage_pos}.{pos}"),
-                                        FontId::new(10., FontFamily::Monospace),
-                                        Color32::BLACK,
-                                    )
-                                }));
+                                for (pos, point) in storage.points.iter().enumerate() {
+                                    painter.add(painter.fonts(|f| {
+                                        Shape::text(
+                                            f,
+                                            to_screen.transform_pos(*point),
+                                            Align2::CENTER_CENTER,
+                                            format!("{storage_pos}.{pos}"),
+                                            FontId::new(10., FontFamily::Monospace),
+                                            Color32::BLACK,
+                                        )
+                                    }));
+                                }
                             }
                         }
 
@@ -535,20 +546,6 @@ impl eframe::App for TemplateApp {
 
                         if escape_pressed {
                             self.reset_car();
-
-                            println!();
-                            for storage in &self.points {
-                                if storage.is_reward {
-                                    println!("rewards_from_points(vec![");
-                                } else {
-                                    println!("walls_from_points(vec![");
-                                }
-                                for point in &storage.points {
-                                    println!("    pos2({:.2}, {:.2}),", point.0.x, point.0.y);
-                                }
-                                println!("].into_iter()),");
-                            }
-                            println!("----");
                         }
 
                         self.simulation.draw(&painter, &to_screen);
@@ -559,7 +556,7 @@ impl eframe::App for TemplateApp {
                         self.simulation.step(
                             &self.params_phys,
                             &self.params_sim,
-                            &mut |origin, dir_pos, t| {
+                            &mut |origin, dir_pos, t, t2| {
                                 if simulation_i == 0 {
                                     painter.add(Shape::line(
                                         vec![
@@ -568,9 +565,30 @@ impl eframe::App for TemplateApp {
                                         ],
                                         Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
                                     ));
+                                    if self.params_sim.nn.pass_dirs_second_layer {
+                                        painter.add(Shape::circle_filled(
+                                            to_screen.transform_pos(origin + (dir_pos - origin) * t),
+                                            3.,
+                                            Color32::from_rgb(0, 0, 255),
+                                        ));
+                                        if let Some(t2) = t2 {
+                                            painter.add(Shape::line(
+                                                vec![
+                                                    to_screen.transform_pos(origin + (dir_pos - origin) * t),
+                                                    to_screen.transform_pos(origin + (dir_pos - origin) * t2),
+                                                ],
+                                                Stroke::new(1.0, Color32::from_rgb(0, 0, 255)),
+                                            )); 
+                                            painter.add(Shape::circle_filled(
+                                                to_screen.transform_pos(origin + (dir_pos - origin) * t2),
+                                                2.,
+                                                Color32::from_rgb(0, 0, 128),
+                                            ));
+                                        }
+                                    }
                                 }
                             },
-                            &mut |time_passed, distance_percent, dpenalty, dirs, internals| {
+                            &mut |time_passed, distance_percent, dpenalty, dirs, dirs_second_layer, internals, current_segment_f32| {
                                 self.graphs.add_point(
                                     "input",
                                     "time_passed",
@@ -684,6 +702,8 @@ impl eframe::App for TemplateApp {
                                         distance_percent,
                                         dpenalty,
                                         dirs,
+                                        dirs_second_layer,
+                                        current_segment_f32,
                                         internals,
                                         &self.params_sim,
                                     );
@@ -746,61 +766,45 @@ impl eframe::App for TemplateApp {
                     });
                 });
 
-                let create_plot = |name: &str, group_name: &str, params: &InterfaceParameters| {
-                    Plot::new(format!("items_demo {} {}", name, group_name))
-                        .legend(Legend::default().position(Corner::RightTop))
-                        .show_x(false)
-                        .show_y(false)
-                        .allow_zoom([false, false])
-                        .allow_scroll([false, false])
-                        .allow_boxed_zoom(false)
-                        .width(params.plot_size)
-                        .height(params.plot_size)
-                };
-                for (group_name, graphs) in self.graphs.points.iter() {
-                    ui.horizontal_wrapped(|ui| {
-                        for (name, (points, color)) in graphs {
-                            ui.allocate_ui(
-                                vec2(
-                                    self.params_intr.plot_size + 5.,
-                                    self.params_intr.plot_size + 5.,
-                                ),
-                                |ui| {
-                                    create_plot(name, group_name, &self.params_intr).show(
-                                        ui,
-                                        |plot_ui| {
-                                            let line =
-                                                Line::new(PlotPoints::from_iter(points.clone()))
-                                                    .fill(0.)
-                                                    .color(*color);
-                                            plot_ui.line(line.name(name));
+                CollapsingHeader::new("Graphs")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let create_plot = |name: &str, group_name: &str, params: &InterfaceParameters| {
+                            Plot::new(format!("items_demo {} {}", name, group_name))
+                                .legend(Legend::default().position(Corner::RightTop))
+                                .show_x(false)
+                                .show_y(false)
+                                .allow_zoom([false, false])
+                                .allow_scroll([false, false])
+                                .allow_boxed_zoom(false)
+                                .width(params.plot_size)
+                                .height(params.plot_size)
+                        };
+                        for (group_name, graphs) in self.graphs.points.iter() {
+                            ui.horizontal_wrapped(|ui| {
+                                for (name, (points, color)) in graphs {
+                                    ui.allocate_ui(
+                                        vec2(
+                                            self.params_intr.plot_size + 5.,
+                                            self.params_intr.plot_size + 5.,
+                                        ),
+                                        |ui| {
+                                            create_plot(name, group_name, &self.params_intr).show(
+                                                ui,
+                                                |plot_ui| {
+                                                    let line =
+                                                        Line::new(PlotPoints::from_iter(points.clone()))
+                                                            .fill(0.)
+                                                            .color(*color);
+                                                    plot_ui.line(line.name(name));
+                                                },
+                                            );
                                         },
                                     );
-                                },
-                            );
+                                }
+                            });
                         }
                     });
-                }
-
-                ui.label(format!(
-                    "Distance: {:.2}%",
-                    self.simulation.reward_path_processor.distance_percent() * 100.
-                ));
-                ui.label(format!(
-                    "Rewards percent: {:.2}%",
-                    self.simulation
-                        .reward_path_processor
-                        .rewards_acquired_percent(&self.params_sim)
-                        * 100.
-                ));
-                ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
-                ui.label(format!("Quota: {}", self.quota));
-                ui.label(format!("Time: {}", self.simulation.time_passed));
-                ui.add(egui::Slider::new(
-                    &mut self.current_edit,
-                    0..=self.points.len().saturating_sub(1),
-                ));
-                egui_array(&mut self.points, "Points", ui, PointsStorage::egui);
             });
         });
 

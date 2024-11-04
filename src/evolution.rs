@@ -91,6 +91,36 @@ pub struct NnParameters {
     pub pass_time_mods: Vec<f32>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Default)]
+pub struct PhysicsPatch {
+    simple_physics: Option<f32>,
+    traction: Option<f32>,
+    acceleration_ratio: Option<f32>,
+    friction_coef: Option<f32>,
+    turn_speed: Option<f32>,
+}
+
+impl PhysicsPatch {
+    fn get_text(name: &str, value: Option<f32>) -> String {
+        if let Some(value) = value {
+            format!(":{}{:.2}", name, value)
+        } else {
+            Default::default()
+        }
+    }
+
+    fn get_text_all(&self) -> String {
+        Self::get_text("s", self.simple_physics) + &Self::get_text("t", self.traction) + &Self::get_text("a", self.acceleration_ratio) + &Self::get_text("f", self.friction_coef) + &Self::get_text("tr", self.turn_speed)
+    }
+
+    fn simple_physics(value: f32) -> Self {
+        Self {
+            simple_physics: Some(value),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct SimulationParameters {
     pub tracks_enabled: BTreeMap<String, bool>,
@@ -124,6 +154,7 @@ pub struct SimulationParameters {
     pub evolution_population_size: usize,
     pub evolution_learning_rate: f64,
     pub evolution_distance_to_solution: f64,
+    pub evolution_simple_add_mid_start: bool,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -132,9 +163,7 @@ pub struct SimulationParameters {
     pub eval_distance: Clamped,     // ratio from 0 to 5000
     pub eval_acquired: Clamped,     // ratio from 0 to 5000
     pub eval_penalty: Clamped,      // ratio from 0 to 5000
-    pub eval_calc_all_physics: bool,
-    pub eval_calc_all_physics_count: usize,
-    pub eval_add_other_physics: bool,
+    pub eval_add_other_physics: Vec<PhysicsPatch>,
 
     pub evolve_simple_physics: bool,
     pub hard_physics_reward: Clamped,
@@ -1748,93 +1777,55 @@ pub fn eval_nn(
         },
     ) in tracks.into_iter().enumerate()
     {
-        let max = if params_sim.start_places_enable && params_sim.start_places_for_tracks[&name] {
+        let car_positions = if params_sim.start_places_enable && params_sim.start_places_for_tracks[&name] {
             rewards.len() - 1
         } else if params_sim.mutate_car_enable {
             params_sim.mutate_car_count
         } else {
             1
         };
-        for i in 0..max {
-            let physics_max = if params_sim.eval_calc_all_physics {
-                params_sim.eval_calc_all_physics_count
+        for car_position in 0..car_positions {
+            let physics_max = if params_sim.eval_add_other_physics.len() > 0 {
+                1 + params_sim.eval_add_other_physics.len()
             } else {
                 1
             };
-            let default = (0.0, 0.9, 0.4, 0.5, 0.1);
-            for (simple_physics, traction, acceleration_ratio, friction_coef, turn_speed) in (0
-                ..physics_max)
-                .map(|i| {
-                    if i == physics_max - 1 {
-                        1.0
-                    } else {
-                        i as f32 / (physics_max - 1) as f32
-                    }
-                    .sqrt()
-                    .sqrt()
-                })
-                .map(|s| {
-                    let mut x = default;
-                    x.0 = s;
-                    x
-                })
-                .chain(if params_sim.eval_add_other_physics {
-                    vec![
-                        // traction
-                        // { let mut x = default; x.1 = 0.5; x },
-                        // { let mut x = default; x.1 = 0.15; x },
-
-                        // acceleration ratio
-                        {
-                            let mut x = default;
-                            x.2 = 0.8;
-                            x
-                        },
-                        {
-                            let mut x = default;
-                            x.2 = 1.0;
-                            x
-                        },
-                        // friction
-                        // { let mut x = default; x.3 = 0.0; x },
-                        // { let mut x = default; x.3 = 1.0; x },
-
-                        // turn speed
-                        // { let mut x = default; x.4 = 0.3; x },
-
-                        // combined
-                        // { let mut x = default; x.2 = 1.0; x.1 = 1.0; x.3 = 0.15; x },
-                    ]
-                    .into_iter()
-                } else {
-                    vec![].into_iter()
-                })
+            for physics_patch in std::iter::once(&PhysicsPatch::default()).chain(params_sim.eval_add_other_physics.iter())
             {
                 let mut params_sim = params_sim.clone();
                 let mut params_phys = params_phys.clone();
-                if params_sim.eval_calc_all_physics || params_sim.eval_add_other_physics {
-                    // params_sim.simulation_simple_physics = simple_physics;
-                    params_sim.simulation_simple_physics = 0.;
+                if let Some(simple_physics) = physics_patch.simple_physics {
+                    params_sim.simulation_simple_physics = simple_physics;
                     params_phys = params_sim.patch_physics_parameters(params_phys.clone());
                 }
 
-                if params_sim.eval_add_other_physics {
+                if let Some(traction) = physics_patch.traction {
                     params_phys.traction_coefficient = traction;
+                }
+
+                if let Some(acceleration_ratio) = physics_patch.acceleration_ratio {
                     params_phys.acceleration_ratio = acceleration_ratio;
+                }
+
+                if let Some(friction_coef) = physics_patch.friction_coef {
                     params_phys.friction_coefficient = friction_coef;
+                }
+
+                if let Some(turn_speed) = physics_patch.turn_speed {
                     params_phys.wheel_turn_per_time = turn_speed;
                 }
 
                 let car = {
                     let result: Car = Default::default();
-                    if i != 0 && params_sim.start_places_enable {
-                        place_car_to_reward(result, &rewards, i)
-                    } else if i != 0 && params_sim.mutate_car_enable {
+                    if car_position != 0 && params_sim.start_places_enable {
+                        place_car_to_reward(result, &rewards, car_position)
+                    } else if car_position != 0 && params_sim.mutate_car_enable {
                         mutate_car(result, &params_sim)
                     } else {
                         result
                     }
                 };
+
                 let mut nn_processor = NnProcessor::new(
                     nn_params,
                     params_sim.nn.clone(),
@@ -1882,19 +1873,11 @@ pub fn eval_nn(
                 }
                 result.push(TrackEvaluation {
                     name: name.clone()
-                        + &if i != 0 {
-                            format!(":{i}")
+                        + &if car_position != 0 {
+                            format!(":{car_position}")
                         } else {
                             Default::default()
-                        } + &if params_sim.eval_calc_all_physics || params_sim.eval_add_other_physics {
-                            format!(":simple{:.2}", simple_physics)
-                        } else {
-                            Default::default()
-                        } + &if params_sim.eval_add_other_physics {
-                            format!(":t{traction:.2}:a{acceleration_ratio:.2}:f{friction_coef:.2}:t{turn_speed:.2}")
-                        } else {
-                            Default::default()
-                        },
+                        } + &physics_patch.get_text_all(),
                     penalty: simulation.penalty,
                     reward: simulation.reward,
                     early_finish_percent,
@@ -2630,6 +2613,7 @@ impl Default for SimulationParameters {
             evolution_population_size: 30,
             evolution_learning_rate: 1.0,
             evolution_distance_to_solution: 10.,
+            evolution_simple_add_mid_start: false,
 
             eval_skip_passed_tracks: false,
             eval_add_min_distance: false,
@@ -2638,9 +2622,7 @@ impl Default for SimulationParameters {
             eval_distance: Clamped::new(1000., 0., 5000.),
             eval_acquired: Clamped::new(1000., 0., 5000.),
             eval_penalty: Clamped::new(20., 0., 5000.),
-            eval_calc_all_physics: false,
-            eval_calc_all_physics_count: 5,
-            eval_add_other_physics: false,
+            eval_add_other_physics: vec![],
 
             evolve_simple_physics: false,
             hard_physics_reward: Clamped::new(10000., 0., 10000.),
@@ -2733,10 +2715,13 @@ fn evolve_simple_physics(
 ) -> Vec<EvolveOutputEachStep> {
     let mut params_sim = params_sim.clone();
     let step = 0.02;
+    let start_simple_physics = 0.98;
 
     let start = Instant::now();
 
-    params_sim.simulation_simple_physics = 0.98;
+    let start_other_physics = params_sim.eval_add_other_physics.clone();
+
+    params_sim.simulation_simple_physics = start_simple_physics;
     let mut result = evolve_by_cma_es_custom(
         &params_sim,
         &params_phys,
@@ -2759,6 +2744,11 @@ fn evolve_simple_physics(
                 params_sim.simulation_simple_physics
             );
         }
+        if params_sim.evolution_simple_add_mid_start {
+            params_sim.eval_add_other_physics = start_other_physics.clone();
+            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics((start_simple_physics + params_sim.simulation_simple_physics) / 2.));
+            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics(start_simple_physics));
+        }
         let evals = eval_nn(&result.last().unwrap().nn, params_phys, &params_sim);
         let evals_cost = sum_evals(&evals, &params_sim);
         if evals_cost < best_simple_cost * good_enough_percent {
@@ -2778,6 +2768,7 @@ fn evolve_simple_physics(
             }
         }
     }
+    params_sim.eval_add_other_physics = start_other_physics.clone();
     result.extend(evolve_by_cma_es_custom(
         &params_sim,
         &params_phys,
@@ -2811,7 +2802,7 @@ fn test_params_sim_evolve_simple(
                 &input,
                 population_size,
                 generations_count,
-                10,
+                11,
             )
         },
     )
@@ -3335,6 +3326,18 @@ pub fn evolution() {
     // params_sim.simulation_stop_penalty.value = 200.;
     // // evolve_by_cma_es_custom(&params_sim, &params_phys, &random_input(&params_sim), 100, 2000, None, None); return;
     // params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_dirs_diff = true;
+    params_sim.evolution_simple_add_mid_start = true;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff_add_simple_mid_start");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_dirs_diff = false;
+    params_sim.evolution_simple_add_mid_start = true;
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff_no_add_simple_mid_start");
+    params_sim = params_sim_copy.clone();
+
+    return;
 
     test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_default");
     params_sim = params_sim_copy.clone();

@@ -913,9 +913,7 @@ pub struct Reward {
 
 impl Reward {
     pub fn new(center: Pos2) -> Self {
-        Self {
-            center,
-        }
+        Self { center }
     }
 
     pub fn grid_ui(&mut self, ui: &mut Ui) {

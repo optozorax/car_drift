@@ -177,7 +177,8 @@ def draw_values_mean_std(axs, losses, name, color, alpha_mul=1.0, disable_percen
 
     x = range(len(losses_median))
     axs.plot(losses_median, label=name, color=color, alpha=alpha_mul)
-    axs.fill_between(x, losses_25, losses_75, color=color, alpha=0.2 * alpha_mul)
+    if not disable_percentiles:
+        axs.fill_between(x, losses_25, losses_75, color=color, alpha=0.2 * alpha_mul)
     if not disable_percentiles:
         axs.fill_between(x, losses_10, losses_25, color=color, alpha=0.05 * alpha_mul)
         axs.fill_between(x, losses_75, losses_90, color=color, alpha=0.05 * alpha_mul)
@@ -781,39 +782,39 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     disable_percentiles=True,
 # )
 
-draw_graph(
-    [
-        {
-            "data": read_json_file("./nn_restart_sm_relu4.json"),
-            "name": "just restart",
-            "alpha": 0.5,
-            "color": colors[0],
-        },
-        {
-            "data": read_json_file("./nn_restart_neuron_sm_relu4.json"),
-            "name": "restart with new neuron",
-            "alpha": 0.5,
-            "color": colors[1],
-        },
-        {
-            "data": read_json_file("./nn_restart_layer_sm_relu4.json"),
-            "name": "restart with new layer",
-            "alpha": 0.5,
-            "color": colors[2],
-        },
-        {
-            "data": read_json_file("./nn_restart_neuron_5_sm_relu4.json"),
-            "name": "restart with 5 new neurons",
-            "alpha": 0.5,
-            "color": colors[3],
-        },
-    ],
-    "Different approaches to restart a evolution",
-    "_restart.png",
-    skip_individuals=True,
-    only_complex_track=True,
-    disable_percentiles=True,
-)
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./nn_restart_sm_relu4.json"),
+#             "name": "just restart",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./nn_restart_neuron_sm_relu4.json"),
+#             "name": "restart with new neuron",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./nn_restart_layer_sm_relu4.json"),
+#             "name": "restart with new layer",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./nn_restart_neuron_5_sm_relu4.json"),
+#             "name": "restart with 5 new neurons",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#     ],
+#     "Different approaches to restart a evolution",
+#     "_restart.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
 
 # draw_graph(
 #     [
@@ -937,13 +938,47 @@ draw_graph(
 
 draw_graph(
     [
+        # {
+        #     "data": read_json_file("./nn2_default_2.json"),
+        #     "name": "nn2_default_2",
+        #     "alpha": 0.5,
+        #     "color": colors[0],
+        # },
+        # {
+        #     "data": read_json_file("./nn2_default_3.json"),
+        #     "name": "nn2_default_3",
+        #     "alpha": 0.5,
+        #     "color": colors[1],
+        # },
+        # {
+        #     "data": read_json_file("./nn2_default_4.json"),
+        #     "name": "nn2_default_4",
+        #     "alpha": 0.5,
+        #     "color": colors[2],
+        # },
+        # {
+        #     "data": read_json_file("./nn2_default_5.json"),
+        #     "name": "nn2_default_5",
+        #     "alpha": 0.5,
+        #     "color": colors[3],
+        # },
         {
-            "data": read_json_file("./simple_test_all_physics.json"),
-            "name": "simple test current track",
+            "data": read_json_file("./nn2_default_5.json"),
+            "name": "nn2_default_5",
+            "alpha": 0.5,
+            "color": colors[4],
+        },
+        {
+            "data": read_json_file("./nn2_default_6.json"),
+            "name": "nn2_default_6",
+            "alpha": 0.5,
+            "color": colors[5],
         },
     ],
-    "simple_test_all_physics",
-    "simple_test_all_physics.png",
+    "nn2_default",
+    "nn2_default_3.png",
+    only_complex_track=True,
+    disable_percentiles=True,
     skip_individuals=True,
 )
 

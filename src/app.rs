@@ -126,6 +126,8 @@ pub struct TemplateApp {
     current_nn: String,
 
     finish_step: usize,
+
+    current_start_reward: usize,
 }
 
 impl Default for TemplateApp {
@@ -197,6 +199,8 @@ impl Default for TemplateApp {
             current_nn: Default::default(),
 
             finish_step: 0,
+
+            current_start_reward: 0,
         }
     }
 }
@@ -234,6 +238,7 @@ impl TemplateApp {
         self.quota = 0;
         self.nn_processor.reset();
         self.finish_step = 0;
+        self.current_start_reward = 0;
     }
 }
 
@@ -296,6 +301,18 @@ impl eframe::App for TemplateApp {
                         if ui.button("Mutate car").clicked() {
                             self.reset_car();
                             self.simulation.car = mutate_car(Default::default(), &self.params_sim);
+                        }
+
+                        let response = ui.add(egui::Slider::new(
+                            &mut self.current_start_reward,
+                            0..=(self.simulation.reward_path_processor.get_rewards().len() - 2),
+                        ));
+                        if response.changed() {
+                            self.simulation.car = place_car_to_reward(
+                                Default::default(),
+                                self.simulation.reward_path_processor.get_rewards(),
+                                self.current_start_reward,
+                            );
                         }
 
                         if ui
@@ -415,14 +432,14 @@ impl eframe::App for TemplateApp {
                                         .reward_path_processor
                                         .get_current_segment_f32()
                                 ));
-                                ui.label(format!("All acquired: {}", self.simulation.reward_path_processor.all_acquired()));
+                                ui.label(format!(
+                                    "All acquired: {}",
+                                    self.simulation.reward_path_processor.all_acquired()
+                                ));
                                 ui.label(format!("Penalty: {:.2}", self.simulation.penalty));
                                 ui.label(format!("Quota: {}", self.quota));
                                 ui.label(format!("Time: {}", self.simulation.time_passed));
-                                if self
-                                    .simulation
-                                    .reward_path_processor
-                                    .all_acquired()
+                                if self.simulation.reward_path_processor.all_acquired()
                                     && self.finish_step == 0
                                 {
                                     self.finish_step = self.quota;

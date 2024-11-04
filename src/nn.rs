@@ -48,12 +48,25 @@ pub fn relu4(x: f32) -> f32 {
     }
 }
 
+pub fn relu5(x: f32) -> f32 {
+    if x > 10. {
+        11. - 1. / (1. + x - 10.)
+    } else if x < -10. {
+        -1.1 + 1. / (1. - x + 10.)
+    } else if x < 0. {
+        x * 0.1
+    } else {
+        x
+    }
+}
+
 fn activation(x: f32) -> f32 {
     // sigmoid(x)
     // relu1(x)
     // relu2(x)
-    relu3(x)
+    // relu3(x)
     // relu4(x)
+    relu5(x)
     // sqrt_sigmoid(x) * 3.
 }
 
@@ -212,10 +225,10 @@ impl NeuralNetwork {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Layer {
-    input_size: usize,
-    output_size: usize,
-    matrix: Vec<Vec<f32>>, // outer vec has size output_size, inner vec has size input_size
-    bias: Vec<f32>,
+    pub input_size: usize,
+    pub output_size: usize,
+    pub matrix: Vec<Vec<f32>>, // outer vec has size output_size, inner vec has size input_size
+    pub bias: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

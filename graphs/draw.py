@@ -985,10 +985,10 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
-data_nn2 = read_json_file("./nn2_dirs_diff.json")
+data_nn2 = read_json_file("./nn2_default.json")
 # data_nn_restart = read_json_file("./nn_restart.json")
 for file_name in json_files:
-    if not file_name.startswith("nn2_dirs_diff_"):
+    if not file_name.startswith("nn2_default_another_step"):
         continue
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)
@@ -1010,7 +1010,7 @@ for file_name in json_files:
             f'Graphs for {file_name}',
             f'{file_name}_graphs.png',
         )
-    elif file_name.startswith("nn2_dirs_diff") and file_name != "nn2_dirs_diff.json":
+    elif file_name.startswith("nn2_"):
         draw_graph(
             [
                 {

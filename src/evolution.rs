@@ -98,6 +98,7 @@ pub struct PhysicsPatch {
     acceleration_ratio: Option<f32>,
     friction_coef: Option<f32>,
     turn_speed: Option<f32>,
+    name: Option<String>,
 }
 
 impl PhysicsPatch {
@@ -110,12 +111,24 @@ impl PhysicsPatch {
     }
 
     fn get_text_all(&self) -> String {
-        Self::get_text("s", self.simple_physics) + &Self::get_text("t", self.traction) + &Self::get_text("a", self.acceleration_ratio) + &Self::get_text("f", self.friction_coef) + &Self::get_text("tr", self.turn_speed)
+        if let Some(name) = &self.name {
+            name.clone()
+        } else {
+            Self::get_text("s", self.simple_physics) + &Self::get_text("t", self.traction) + &Self::get_text("a", self.acceleration_ratio) + &Self::get_text("f", self.friction_coef) + &Self::get_text("tr", self.turn_speed)
+        }
     }
 
     fn simple_physics(value: f32) -> Self {
         Self {
             simple_physics: Some(value),
+            ..Self::default()
+        }
+    }
+
+    fn simple_physics_ignored(value: f32) -> Self {
+        Self {
+            simple_physics: Some(value),
+            name: Some(Self::get_text("s", Some(value)) + "_ignore"),
             ..Self::default()
         }
     }
@@ -1577,7 +1590,8 @@ pub fn print_evals(evals: &[TrackEvaluation]) {
     }
 }
 
-pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters) -> f32 {
+pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters, ignore_ignored: bool) -> f32 {
+    let evals = evals.iter().filter(|x| !x.name.ends_with("_ignore")).collect::<Vec<_>>();
     if params.rewards_second_way {
         let all_acquired = evals.iter().all(|x| x.all_acquired);
         let len = evals.len() as f32;
@@ -1924,7 +1938,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
     let now = Instant::now();
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(pos, &params_phys, params_sim);
-        -sum_evals(&evals, params_sim)
+        -sum_evals(&evals, params_sim, false)
     });
     for pos in 0..100_000 {
         let value = de.iter().next().unwrap();
@@ -1962,7 +1976,7 @@ pub fn evolve_by_differential_evolution_custom(
 
     let mut de = self_adaptive_de(input_done, |pos| {
         let evals = eval_nn(pos, &params_phys, params_sim);
-        -sum_evals(&evals, params_sim)
+        -sum_evals(&evals, params_sim, false)
     });
 
     let mut true_params_sim = SimulationParameters::true_metric(&params_sim);
@@ -1981,8 +1995,8 @@ pub fn evolve_by_differential_evolution_custom(
 
         result.push(EvolveOutputEachStep {
             nn: point.iter().copied().collect(),
-            evals_cost: sum_evals(&evals, params_sim),
-            true_evals_cost: sum_evals(&true_evals, &true_params_sim),
+            evals_cost: sum_evals(&evals, params_sim, false),
+            true_evals_cost: sum_evals(&true_evals, &true_params_sim, false),
             evals,
             true_evals,
         });
@@ -2011,7 +2025,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         .sample_mean(params_sim.evolution_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(&from_dvector_to_f32_vec(&x), &params_phys, &params_sim);
-            -sum_evals(&evals, &params_sim) as f64
+            -sum_evals(&evals, &params_sim, false) as f64
         })
         .unwrap();
     let now = Instant::now();
@@ -2105,7 +2119,7 @@ pub fn evolve_by_cma_es_custom(
         .sample_mean(params_sim.evolution_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
             let evals = eval_nn(&from_dvector_to_f32_vec(&x), params_phys, params_sim);
-            -sum_evals(&evals, params_sim) as f64
+            -sum_evals(&evals, params_sim, false) as f64
         })
         .unwrap();
 
@@ -2124,9 +2138,9 @@ pub fn evolve_by_cma_es_custom(
         true_params_sim = patch_params_sim(&nn, &true_params_sim);
 
         let evals = eval_nn(&nn, params_phys, &params_sim);
-        let evals_cost = sum_evals(&evals, params_sim);
+        let evals_cost = sum_evals(&evals, params_sim, true);
         let true_evals = eval_nn(&nn, params_phys, &true_params_sim);
-        let true_evals_cost = sum_evals(&true_evals, &true_params_sim);
+        let true_evals_cost = sum_evals(&true_evals, &true_params_sim, true);
 
         result.push(EvolveOutputEachStep {
             nn: nn,
@@ -2252,7 +2266,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
                 &self.params_phys,
                 &self.params_sim,
             );
-            Ok(-sum_evals(&evals, &self.params_sim) as f64)
+            Ok(-sum_evals(&evals, &self.params_sim, false) as f64)
         }
     }
     impl Gradient for NnStruct {
@@ -2266,7 +2280,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
                     &self.params_phys,
                     &self.params_sim,
                 );
-                -sum_evals(&evals, &self.params_sim) as f64
+                -sum_evals(&evals, &self.params_sim, false) as f64
             }))
         }
     }
@@ -2405,7 +2419,7 @@ pub fn evolve_by_particle_swarm_custom(
                 &self.params_phys,
                 &self.params_sim,
             );
-            Ok(-sum_evals(&evals, &self.params_sim) as f64)
+            Ok(-sum_evals(&evals, &self.params_sim, false) as f64)
         }
     }
 
@@ -2453,9 +2467,9 @@ pub fn evolve_by_particle_swarm_custom(
         true_params_sim = patch_params_sim(&nn, &true_params_sim);
 
         let evals = eval_nn(&nn, params_phys, &params_sim);
-        let evals_cost = sum_evals(&evals, params_sim);
+        let evals_cost = sum_evals(&evals, params_sim, false);
         let true_evals = eval_nn(&nn, params_phys, &true_params_sim);
-        let true_evals_cost = sum_evals(&true_evals, &true_params_sim);
+        let true_evals_cost = sum_evals(&true_evals, &true_params_sim, false);
 
         result.push(EvolveOutputEachStep {
             nn: nn,
@@ -2495,7 +2509,7 @@ fn calc_gradient(params_sim: &SimulationParameters) {
             &params_sim.patch_physics_parameters(PhysicsParameters::default()),
             params_sim,
         );
-        -sum_evals(&evals, params_sim)
+        -sum_evals(&evals, params_sim, false)
     }));
     dbg!(count);
     dbg!(time.elapsed());
@@ -2714,7 +2728,7 @@ fn evolve_simple_physics(
     generations_count_adapt: usize,
 ) -> Vec<EvolveOutputEachStep> {
     let mut params_sim = params_sim.clone();
-    let step = 0.02;
+    let step = 0.1;
     let start_simple_physics = 0.98;
 
     let start = Instant::now();
@@ -2734,7 +2748,13 @@ fn evolve_simple_physics(
     let good_enough_percent = 0.999;
     let best_simple_cost = result.last().unwrap().evals_cost;
     while params_sim.simulation_simple_physics > 0. {
-        params_sim.simulation_simple_physics -= step;
+        if params_sim.simulation_simple_physics < 0.1 {
+            params_sim.simulation_simple_physics -= step / 4.;
+        } else if params_sim.simulation_simple_physics < 0.3 {
+            params_sim.simulation_simple_physics -= step / 2.;
+        } else {
+            params_sim.simulation_simple_physics -= step;
+        }
         if params_sim.simulation_simple_physics < 0. {
             params_sim.simulation_simple_physics = 0.;
         }
@@ -2746,11 +2766,10 @@ fn evolve_simple_physics(
         }
         if params_sim.evolution_simple_add_mid_start {
             params_sim.eval_add_other_physics = start_other_physics.clone();
-            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics((start_simple_physics + params_sim.simulation_simple_physics) / 2.));
-            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics(start_simple_physics));
+            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics_ignored((start_simple_physics + params_sim.simulation_simple_physics) / 2.));
         }
         let evals = eval_nn(&result.last().unwrap().nn, params_phys, &params_sim);
-        let evals_cost = sum_evals(&evals, &params_sim);
+        let evals_cost = sum_evals(&evals, &params_sim, true);
         if evals_cost < best_simple_cost * good_enough_percent {
             let result2 = evolve_by_cma_es_custom(
                 &params_sim,
@@ -3314,33 +3333,10 @@ pub fn evolution() {
 
     let mut params_sim_copy = params_sim.clone();
 
-    // попытка сделать слепошару
-    // params_sim.nn.pass_dirs = false;
-    // params_sim.nn.pass_current_segment = true;
-    // params_sim.tracks_enable_mirror = false;
-    // params_sim.rewards_second_way_penalty = false;
-    // params_sim.nn.pass_internals = false;
-    // params_sim.nn.pass_time_mods = vec![5., 10., 20., 40., 80.];
-    // params_sim.nn.max_tracks = 6;
-    // params_sim.simulation_simple_physics = 0.98;
-    // params_sim.simulation_stop_penalty.value = 200.;
-    // // evolve_by_cma_es_custom(&params_sim, &params_phys, &random_input(&params_sim), 100, 2000, None, None); return;
-    // params_sim = params_sim_copy.clone();
-
-    params_sim.nn.pass_dirs_diff = true;
-    params_sim.evolution_simple_add_mid_start = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff_add_simple_mid_start");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.nn.pass_dirs_diff = false;
-    params_sim.evolution_simple_add_mid_start = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff_no_add_simple_mid_start");
+    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_default_another_step");
     params_sim = params_sim_copy.clone();
 
     return;
-
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_default");
-    params_sim = params_sim_copy.clone();
 
     params_sim.nn.pass_dirs_diff = true;
     test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff");

@@ -351,7 +351,7 @@ impl eframe::App for TemplateApp {
                                         print_evals(&true_evals);
                                         println!(
                                             "Cost: {}",
-                                            sum_evals(&true_evals, &self.params_sim)
+                                            sum_evals(&true_evals, &self.params_sim, false)
                                         );
                                         println!("-----");
                                         self.nn_processor = NnProcessor::new(

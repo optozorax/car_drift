@@ -114,7 +114,11 @@ impl PhysicsPatch {
         if let Some(name) = &self.name {
             name.clone()
         } else {
-            Self::get_text("s", self.simple_physics) + &Self::get_text("t", self.traction) + &Self::get_text("a", self.acceleration_ratio) + &Self::get_text("f", self.friction_coef) + &Self::get_text("tr", self.turn_speed)
+            Self::get_text("s", self.simple_physics)
+                + &Self::get_text("t", self.traction)
+                + &Self::get_text("a", self.acceleration_ratio)
+                + &Self::get_text("f", self.friction_coef)
+                + &Self::get_text("tr", self.turn_speed)
         }
     }
 
@@ -1185,7 +1189,7 @@ impl NnProcessor {
         }
     }
 
-    pub fn process(
+    pub fn calc_input_vector(
         &mut self,
         time_passed: f32,
         distance_percent: f32,
@@ -1195,9 +1199,7 @@ impl NnProcessor {
         current_segment_f32: f32,
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
-    ) -> CarInput {
-        self.calc_counts += 1;
-
+    ) -> &[f32] {
         let mut input_values_iter = self.input_values.iter_mut();
 
         if self.params.pass_time {
@@ -1289,6 +1291,32 @@ impl NnProcessor {
 
         assert!(input_values_iter.next().is_none());
 
+        &self.input_values
+    }
+
+    pub fn process(
+        &mut self,
+        time_passed: f32,
+        distance_percent: f32,
+        dpenalty: f32,
+        dirs: &[Option<f32>],
+        dirs_second_layer: &[Option<f32>],
+        current_segment_f32: f32,
+        internals: &InternalCarValues,
+        params_sim: &SimulationParameters,
+    ) -> CarInput {
+        self.calc_counts += 1;
+
+        self.calc_input_vector(
+            time_passed,
+            distance_percent,
+            dpenalty,
+            dirs,
+            dirs_second_layer,
+            current_segment_f32,
+            internals,
+            params_sim,
+        );
         let values = self.nn.calc(&self.input_values);
 
         let mut output_values_iter = values.iter();
@@ -1590,8 +1618,15 @@ pub fn print_evals(evals: &[TrackEvaluation]) {
     }
 }
 
-pub fn sum_evals(evals: &[TrackEvaluation], params: &SimulationParameters, ignore_ignored: bool) -> f32 {
-    let evals = evals.iter().filter(|x| !x.name.ends_with("_ignore")).collect::<Vec<_>>();
+pub fn sum_evals(
+    evals: &[TrackEvaluation],
+    params: &SimulationParameters,
+    ignore_ignored: bool,
+) -> f32 {
+    let evals = evals
+        .iter()
+        .filter(|x| !x.name.ends_with("_ignore"))
+        .collect::<Vec<_>>();
     if params.rewards_second_way {
         let all_acquired = evals.iter().all(|x| x.all_acquired);
         let len = evals.len() as f32;
@@ -1791,20 +1826,22 @@ pub fn eval_nn(
         },
     ) in tracks.into_iter().enumerate()
     {
-        let car_positions = if params_sim.start_places_enable && params_sim.start_places_for_tracks[&name] {
-            rewards.len() - 1
-        } else if params_sim.mutate_car_enable {
-            params_sim.mutate_car_count
-        } else {
-            1
-        };
+        let car_positions =
+            if params_sim.start_places_enable && params_sim.start_places_for_tracks[&name] {
+                rewards.len() - 1
+            } else if params_sim.mutate_car_enable {
+                params_sim.mutate_car_count
+            } else {
+                1
+            };
         for car_position in 0..car_positions {
             let physics_max = if params_sim.eval_add_other_physics.len() > 0 {
                 1 + params_sim.eval_add_other_physics.len()
             } else {
                 1
             };
-            for physics_patch in std::iter::once(&PhysicsPatch::default()).chain(params_sim.eval_add_other_physics.iter())
+            for physics_patch in std::iter::once(&PhysicsPatch::default())
+                .chain(params_sim.eval_add_other_physics.iter())
             {
                 let mut params_sim = params_sim.clone();
                 let mut params_phys = params_phys.clone();
@@ -1891,7 +1928,8 @@ pub fn eval_nn(
                             format!(":{car_position}")
                         } else {
                             Default::default()
-                        } + &physics_patch.get_text_all(),
+                        }
+                        + &physics_patch.get_text_all(),
                     penalty: simulation.penalty,
                     reward: simulation.reward,
                     early_finish_percent,
@@ -2708,7 +2746,7 @@ impl SimulationParameters {
     }
 }
 
-fn save_json_to_file<T: Serialize>(t: &T, name: &str) {
+pub fn save_json_to_file<T: Serialize>(t: &T, name: &str) {
     use std::io::Write;
     let mut file = std::fs::File::create(&name).unwrap();
     let json = serde_json::to_string(&t).unwrap();
@@ -2766,7 +2804,11 @@ fn evolve_simple_physics(
         }
         if params_sim.evolution_simple_add_mid_start {
             params_sim.eval_add_other_physics = start_other_physics.clone();
-            params_sim.eval_add_other_physics.push(PhysicsPatch::simple_physics_ignored((start_simple_physics + params_sim.simulation_simple_physics) / 2.));
+            params_sim
+                .eval_add_other_physics
+                .push(PhysicsPatch::simple_physics_ignored(
+                    (start_simple_physics + params_sim.simulation_simple_physics) / 2.,
+                ));
         }
         let evals = eval_nn(&result.last().unwrap().nn, params_phys, &params_sim);
         let evals_cost = sum_evals(&evals, &params_sim, true);
@@ -3237,6 +3279,18 @@ fn evolve_by_bfgs_autoencoder(
     println!("{evals}");
 }
 
+fn test_python_nn(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
+    let file = std::fs::read_to_string("records/neural_network.json").unwrap();
+    let nn: NeuralNetworkUnoptimized = serde_json::from_str(&file).unwrap();
+    let nn = nn.to_optimized();
+    let mut params = nn.get_values().to_owned();
+    params.push(0.);
+
+    // println!("{:?}", params);
+
+    print_evals(&eval_nn(&params, params_phys, params_sim));
+}
+
 fn print_mean_std_of_best_nns(params_sim: &SimulationParameters) {
     let file = std::fs::read_to_string("graphs/graphs_to_copy/nn2_default.json").unwrap();
     let all_runs: Vec<Vec<EvolveOutputEachStep>> = serde_json::from_str(&file).unwrap();
@@ -3332,6 +3386,15 @@ pub fn evolution() {
     params_sim.nn.inv_distance_coef = 30.;
 
     let mut params_sim_copy = params_sim.clone();
+
+    params_sim.simulation_stop_penalty.value = 2000.;
+    params_sim.simulation_simple_physics = 0.0;
+    params_sim.nn.pass_dirs_diff = true;
+    params_sim.nn.pass_internals = true;
+    params_sim.nn.hidden_layers = vec![10];
+    test_python_nn(&params_sim, &params_phys);
+
+    return;
 
     test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_default_another_step");
     params_sim = params_sim_copy.clone();

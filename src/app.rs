@@ -128,6 +128,9 @@ pub struct TemplateApp {
     finish_step: usize,
 
     current_start_reward: usize,
+
+    record_user_actions: bool,
+    records: Vec<(Vec<f32>, Vec<f32>)>,
 }
 
 impl Default for TemplateApp {
@@ -141,11 +144,11 @@ impl Default for TemplateApp {
         params_sim.mutate_car_enable = false;
         params_sim.nn.hidden_layers = vec![10];
         params_sim.nn.inv_distance_coef = 30.;
-        params_sim.nn.pass_current_track = true;
-        params_sim.nn.pass_current_segment = true;
+        // params_sim.nn.pass_current_track = true;
+        // params_sim.nn.pass_current_segment = true;
         params_sim.nn.pass_dirs_diff = true;
         params_sim.nn.pass_internals = true;
-        params_sim.nn.pass_next_size = 3;
+        // params_sim.nn.pass_next_size = 3;
         params_sim.nn.pass_simple_physics_value = false;
         params_sim.nn.view_angle_ratio = 3. / 6.;
         params_sim.rewards_add_each_acquire = true;
@@ -154,6 +157,10 @@ impl Default for TemplateApp {
         params_sim.rewards_second_way_penalty = true;
         params_sim.simulation_enable_random_nn_output = false;
         params_sim.simulation_simple_physics = 0.;
+
+        params_sim.nn.pass_dirs_diff = true;
+        params_sim.nn.pass_internals = true;
+        params_sim.nn.hidden_layers = vec![20, 10];
 
         Self {
             rng: StdRng::seed_from_u64(42),
@@ -177,7 +184,7 @@ impl Default for TemplateApp {
 
             quota: 0,
 
-            nn_processor: NnProcessor::new_zeros(Default::default(), 1.0, 0),
+            nn_processor: NnProcessor::new_zeros(params_sim.nn.clone(), 1.0, 0),
 
             simulation: CarSimulation::new(
                 Default::default(),
@@ -199,6 +206,9 @@ impl Default for TemplateApp {
             finish_step: 0,
 
             current_start_reward: 0,
+
+            record_user_actions: false,
+            records: vec![],
         }
     }
 }
@@ -237,6 +247,7 @@ impl TemplateApp {
         self.nn_processor.reset();
         self.finish_step = 0;
         self.current_start_reward = 0;
+        self.records.clear();
     }
 }
 
@@ -322,6 +333,17 @@ impl eframe::App for TemplateApp {
                             .clicked()
                         {
                             self.override_nn = !self.override_nn;
+                        }
+
+                        if ui
+                            .button(if self.record_user_actions {
+                                "Stop record actions"
+                            } else {
+                                "Start record actions"
+                            })
+                            .clicked()
+                        {
+                            self.record_user_actions = !self.record_user_actions;
                         }
 
                         CollapsingHeader::new("Insert NN")
@@ -444,6 +466,19 @@ impl eframe::App for TemplateApp {
                                 }
                                 if self.finish_step != 0 {
                                     ui.label(format!("Finished at: {}", self.finish_step));
+                                    if self.record_user_actions {
+                                        let name = format!(
+                                            "records/record_{}_{}.json",
+                                            self.current_track,
+                                            chrono::Local::now()
+                                                .format("%Y_%m_%d__%H_%M_%S")
+                                                .to_string()
+                                        );
+                                        println!("Saved to {name}");
+                                        save_json_to_file(&self.records, &name);
+                                        self.records.clear();
+                                        self.record_user_actions = false;
+                                    }
                                 }
                             });
                     });
@@ -753,30 +788,60 @@ impl eframe::App for TemplateApp {
                                     }
 
                                     if self.override_nn {
-                                        CarInput {
-                                            brake: keys_down.contains(&egui::Key::Space) as usize
-                                                as f32,
-                                            acceleration: if keys_down.contains(&egui::Key::ArrowUp)
+                                        let input_arr = [
+                                            if keys_down.contains(&egui::Key::Space) {
+                                                20.
+                                            } else {
+                                                0.0
+                                            },
+                                            if keys_down.contains(&egui::Key::ArrowUp) {
+                                                20.
+                                            } else {
+                                                0.0
+                                            },
+                                            if keys_down.contains(&egui::Key::ArrowDown) {
+                                                20.
+                                            } else {
+                                                0.0
+                                            },
+                                            if !keys_down.contains(&egui::Key::ArrowLeft)
+                                                && !keys_down.contains(&egui::Key::ArrowRight)
                                             {
-                                                1.0
-                                            } else if keys_down.contains(&egui::Key::ArrowDown) {
-                                                -1.0
+                                                20.
                                             } else {
                                                 0.0
                                             },
-                                            remove_turn: (!(keys_down
-                                                .contains(&egui::Key::ArrowLeft)
-                                                || keys_down.contains(&egui::Key::ArrowRight)))
-                                                as usize
-                                                as f32,
-                                            turn: if keys_down.contains(&egui::Key::ArrowLeft) {
-                                                1.0
-                                            } else if keys_down.contains(&egui::Key::ArrowRight) {
-                                                -1.0
+                                            if keys_down.contains(&egui::Key::ArrowLeft) {
+                                                20.
                                             } else {
                                                 0.0
                                             },
+                                            if keys_down.contains(&egui::Key::ArrowRight) {
+                                                20.
+                                            } else {
+                                                0.0
+                                            },
+                                        ];
+
+                                        if self.record_user_actions {
+                                            self.records.push((
+                                                self.nn_processor
+                                                    .calc_input_vector(
+                                                        time_passed,
+                                                        distance_percent,
+                                                        dpenalty,
+                                                        dirs,
+                                                        dirs_second_layer,
+                                                        current_segment_f32,
+                                                        internals,
+                                                        &self.params_sim,
+                                                    )
+                                                    .to_owned(),
+                                                input_arr.to_vec(),
+                                            ));
                                         }
+
+                                        CarInput::from_f32(&input_arr)
                                     } else {
                                         let result = self.nn_processor.process(
                                             time_passed,

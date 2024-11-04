@@ -137,8 +137,6 @@ impl Default for TemplateApp {
         params_sim.enable_all_tracks();
         params_sim.disable_track("straight_45");
         params_sim.eval_add_min_distance = false;
-        params_sim.eval_add_other_physics = true;
-        params_sim.eval_calc_all_physics = true;
         params_sim.evolve_simple_physics = false;
         params_sim.mutate_car_enable = false;
         params_sim.nn.hidden_layers = vec![10];

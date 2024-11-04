@@ -238,7 +238,7 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
     axs[offset+2, 0].set_title('Penalty average')
     axs[offset+2, 0].set(xlabel='Epoch', ylabel='Penalty')
     axs[offset+2, 0].legend()
-    axs[offset+2, 0].set_ylim(top=25)
+    # axs[offset+2, 0].set_ylim(top=25)
 
     for data in datas_with_style:
         draw_values_mean_std(axs[offset+2, 1], process_data(data["data"], step_get_penalty_max), data["name"], data.get('color', 'red'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
@@ -280,7 +280,7 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
     fig.suptitle(title)
     draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles)
     for ax in axs.flat:
-        # ax.set_xlim(left=-30, right=530)
+        ax.set_xlim(left=-30, right=530)
         ax.grid(axis='both', color='0.85')
     plt.tight_layout()
     plt.savefig(filename)
@@ -936,51 +936,19 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     skip_individuals=True,
 # )
 
-draw_graph(
-    [
-        # {
-        #     "data": read_json_file("./nn2_default_2.json"),
-        #     "name": "nn2_default_2",
-        #     "alpha": 0.5,
-        #     "color": colors[0],
-        # },
-        # {
-        #     "data": read_json_file("./nn2_default_3.json"),
-        #     "name": "nn2_default_3",
-        #     "alpha": 0.5,
-        #     "color": colors[1],
-        # },
-        # {
-        #     "data": read_json_file("./nn2_default_4.json"),
-        #     "name": "nn2_default_4",
-        #     "alpha": 0.5,
-        #     "color": colors[2],
-        # },
-        # {
-        #     "data": read_json_file("./nn2_default_5.json"),
-        #     "name": "nn2_default_5",
-        #     "alpha": 0.5,
-        #     "color": colors[3],
-        # },
-        {
-            "data": read_json_file("./nn2_default_5.json"),
-            "name": "nn2_default_5",
-            "alpha": 0.5,
-            "color": colors[4],
-        },
-        {
-            "data": read_json_file("./nn2_default_6.json"),
-            "name": "nn2_default_6",
-            "alpha": 0.5,
-            "color": colors[5],
-        },
-    ],
-    "nn2_default",
-    "nn2_default_3.png",
-    only_complex_track=True,
-    disable_percentiles=True,
-    skip_individuals=True,
-)
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./nn2_default.json"),
+#             "name": "nn2_default",
+#         },
+#     ],
+#     "nn2_default",
+#     "nn2_default.png",
+#     # only_complex_track=True,
+#     # disable_percentiles=True,
+#     # skip_individuals=True,
+# )
 
 # draw_graph(
 #     [
@@ -1017,65 +985,65 @@ draw_graph(
 
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
-# data_nn = read_json_file("./nn_default.json")
+data_nn2 = read_json_file("./nn2_dirs_diff.json")
 # data_nn_restart = read_json_file("./nn_restart.json")
-# for file_name in json_files:
-#     if file_name != "nn_default_sm.json":
-#         continue
-#     file_path = os.path.join('.', file_name)
-#     data = read_json_file(file_path)
-#     if file_name.startswith("nn_restart"):
-#         draw_graph(
-#             [
-#                 {
-#                     "data": data,
-#                     "name": "current",
-#                 },
-#                 {
-#                     "data": data_nn_restart,
-#                     "name": "default",
-#                     "color": 'gray',
-#                     "alpha": 0.5,
-#                     'style': 'dashed',
-#                 }
-#             ],
-#             f'Graphs for {file_name}',
-#             f'{file_name}_graphs.png',
-#         )
-#     elif file_name.startswith("nn_"):
-#         draw_graph(
-#             [
-#                 {
-#                     "data": data,
-#                     "name": "current",
-#                 },
-#                 {
-#                     "data": data_nn,
-#                     "name": "default",
-#                     "color": 'gray',
-#                     "alpha": 0.5,
-#                     'style': 'dashed',
-#                 }
-#             ],
-#             f'Graphs for {file_name}',
-#             f'{file_name}_graphs.png',
-#         )
-#     # else:
-#         # draw_graph(
-#         #     [
-#         #         {
-#         #             "data": data,
-#         #             "name": "current",
-#         #         },
-#         #         {
-#         #             "data": data_default,
-#         #             "name": "default",
-#         #             "color": 'gray',
-#         #             "alpha": 0.5,
-#         #             'style': 'dashed',
-#         #         }
-#         #     ],
-#         #     f'Graphs for {file_name}',
-#         #     f'{file_name}_graphs.png',
-#         # )
-#     print(f"Finish drawing for {file_name}")
+for file_name in json_files:
+    if not file_name.startswith("nn2_dirs_diff_"):
+        continue
+    file_path = os.path.join('.', file_name)
+    data = read_json_file(file_path)
+    if file_name.startswith("nn_restart"):
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_nn_restart,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
+    elif file_name.startswith("nn2_dirs_diff") and file_name != "nn2_dirs_diff.json":
+        draw_graph(
+            [
+                {
+                    "data": data,
+                    "name": "current",
+                },
+                {
+                    "data": data_nn2,
+                    "name": "default",
+                    "color": 'gray',
+                    "alpha": 0.5,
+                    'style': 'dashed',
+                }
+            ],
+            f'Graphs for {file_name}',
+            f'{file_name}_graphs.png',
+        )
+    # else:
+        # draw_graph(
+        #     [
+        #         {
+        #             "data": data,
+        #             "name": "current",
+        #         },
+        #         {
+        #             "data": data_default,
+        #             "name": "default",
+        #             "color": 'gray',
+        #             "alpha": 0.5,
+        #             'style': 'dashed',
+        #         }
+        #     ],
+        #     f'Graphs for {file_name}',
+        #     f'{file_name}_graphs.png',
+        # )
+    print(f"Finish drawing for {file_name}")

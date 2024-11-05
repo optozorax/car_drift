@@ -280,7 +280,7 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
     fig.suptitle(title)
     draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles)
     for ax in axs.flat:
-        ax.set_xlim(left=-30, right=530)
+        # ax.set_xlim(left=-30, right=530)
         ax.grid(axis='both', color='0.85')
     plt.tight_layout()
     plt.savefig(filename)
@@ -988,7 +988,7 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 data_nn2 = read_json_file("./nn2_default.json")
 # data_nn_restart = read_json_file("./nn_restart.json")
 for file_name in json_files:
-    if not file_name.startswith("nn2_default_another_step"):
+    if not file_name.startswith("nn2_default_places_hard_physics_2000"):
         continue
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)

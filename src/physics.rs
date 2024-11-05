@@ -524,6 +524,7 @@ impl Car {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct CarInput {
     pub brake: f32, // 0..1
     pub acceleration: f32,

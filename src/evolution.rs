@@ -28,6 +28,7 @@ use egui::Ui;
 use egui::Vec2;
 use rand::thread_rng;
 use rand::Rng;
+use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use serde::Deserialize;
@@ -89,20 +90,23 @@ pub struct NnParameters {
     pub autoencoder_hidden_layers: Vec<usize>,
 
     pub pass_time_mods: Vec<f32>,
+
+    pub use_ranking_network: bool,
+    pub ranking_hidden_layers: Vec<usize>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Default)]
 pub struct PhysicsPatch {
-    simple_physics: Option<f32>,
-    traction: Option<f32>,
-    acceleration_ratio: Option<f32>,
-    friction_coef: Option<f32>,
-    turn_speed: Option<f32>,
-    name: Option<String>,
+    pub simple_physics: Option<f32>,
+    pub traction: Option<f32>,
+    pub acceleration_ratio: Option<f32>,
+    pub friction_coef: Option<f32>,
+    pub turn_speed: Option<f32>,
+    pub name: Option<String>,
 }
 
 impl PhysicsPatch {
-    fn get_text(name: &str, value: Option<f32>) -> String {
+    pub fn get_text(name: &str, value: Option<f32>) -> String {
         if let Some(value) = value {
             format!(":{}{:.2}", name, value)
         } else {
@@ -110,7 +114,7 @@ impl PhysicsPatch {
         }
     }
 
-    fn get_text_all(&self) -> String {
+    pub fn get_text_all(&self) -> String {
         if let Some(name) = &self.name {
             name.clone()
         } else {
@@ -122,14 +126,14 @@ impl PhysicsPatch {
         }
     }
 
-    fn simple_physics(value: f32) -> Self {
+    pub fn simple_physics(value: f32) -> Self {
         Self {
             simple_physics: Some(value),
             ..Self::default()
         }
     }
 
-    fn simple_physics_ignored(value: f32) -> Self {
+    pub fn simple_physics_ignored(value: f32) -> Self {
         Self {
             simple_physics: Some(value),
             name: Some(Self::get_text("s", Some(value)) + "_ignore"),
@@ -250,36 +254,55 @@ impl NnParameters {
     const CAR_INPUT_SIZE: usize = InternalCarValues::SIZE;
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
 
+    pub fn get_ranking_input_size(&self) -> usize {
+        Self::CAR_INPUT_SIZE * 2 + self.dirs_size * 3
+    }
+
     pub fn get_total_input_neurons(&self) -> usize {
-        self.pass_time as usize
-            + self.pass_distance as usize
-            + self.pass_dpenalty as usize
-            + self.pass_dirs as usize
-                * if self.use_dirs_autoencoder {
-                    self.autoencoder_exits
-                } else {
-                    self.dirs_size
-                }
-            + self.pass_internals as usize * Self::CAR_INPUT_SIZE
-            + self.pass_next_size
-            + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
-            + self.pass_simple_physics_value as usize
-            + self.pass_current_track as usize * self.max_tracks
-            + self.pass_dirs_diff as usize * self.dirs_size
-            + self.pass_time_mods.len()
-            + self.pass_current_segment as usize * self.max_segments * self.max_tracks
-            + self.pass_dirs_second_layer as usize * self.dirs_size
+        if self.use_ranking_network {
+            self.get_ranking_input_size()
+        } else {
+            self.pass_time as usize
+                + self.pass_distance as usize
+                + self.pass_dpenalty as usize
+                + self.pass_dirs as usize
+                    * if self.use_dirs_autoencoder {
+                        self.autoencoder_exits
+                    } else {
+                        self.dirs_size
+                    }
+                + self.pass_internals as usize * Self::CAR_INPUT_SIZE
+                + self.pass_next_size
+                + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
+                + self.pass_simple_physics_value as usize
+                + self.pass_current_track as usize * self.max_tracks
+                + self.pass_dirs_diff as usize * self.dirs_size
+                + self.pass_time_mods.len()
+                + self.pass_current_segment as usize * self.max_segments * self.max_tracks
+                + self.pass_dirs_second_layer as usize * self.dirs_size
+        }
     }
 
     pub fn get_total_output_neurons(&self) -> usize {
-        Self::CAR_OUTPUT_SIZE + self.pass_next_size
+        if self.use_ranking_network {
+            1
+        } else {
+            Self::CAR_OUTPUT_SIZE + self.pass_next_size
+        }
     }
 
     pub fn get_nn_sizes(&self) -> Vec<usize> {
-        std::iter::once(self.get_total_input_neurons())
-            .chain(self.hidden_layers.iter().copied())
-            .chain(std::iter::once(self.get_total_output_neurons()))
-            .collect()
+        if self.use_ranking_network {
+            std::iter::once(self.get_total_input_neurons())
+                .chain(self.ranking_hidden_layers.iter().copied())
+                .chain(std::iter::once(self.get_total_output_neurons()))
+                .collect()
+        } else {
+            std::iter::once(self.get_total_input_neurons())
+                .chain(self.hidden_layers.iter().copied())
+                .chain(std::iter::once(self.get_total_output_neurons()))
+                .collect()
+        }
     }
 
     pub fn get_nn_autoencoder_input_sizes(&self) -> Vec<usize> {
@@ -1142,6 +1165,13 @@ pub struct NnProcessor {
     nn_autoencoder: NnProcessorAutoencoder,
 }
 
+pub struct SimulationVars<'a> {
+    car: &'a Car,
+    walls: &'a [Wall],
+    params_phys: &'a PhysicsParameters,
+    dirs: &'a [Pos2],
+}
+
 impl NnProcessor {
     pub fn new_zeros(nn_params: NnParameters, simple_physics: f32, current_track: usize) -> Self {
         Self {
@@ -1304,7 +1334,138 @@ impl NnProcessor {
         current_segment_f32: f32,
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
+        simulation_vars: SimulationVars,
     ) -> CarInput {
+        if self.params.use_ranking_network {
+            const POSSIBLE_ACTIONS: [CarInput; 11] = [
+                CarInput {
+                    brake: 0.,
+                    acceleration: 0.,
+                    remove_turn: 0.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 1.,
+                    acceleration: 0.,
+                    remove_turn: 0.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 1.,
+                    remove_turn: 0.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: -1.,
+                    remove_turn: 0.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 0.,
+                    remove_turn: 1.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 0.,
+                    remove_turn: 0.,
+                    turn: 1.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 0.,
+                    remove_turn: 0.,
+                    turn: -1.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 1.,
+                    remove_turn: 0.,
+                    turn: 1.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 1.,
+                    remove_turn: 0.,
+                    turn: -1.,
+                },
+                CarInput {
+                    brake: 0.,
+                    acceleration: 1.,
+                    remove_turn: 1.,
+                    turn: 0.,
+                },
+                CarInput {
+                    brake: 1.,
+                    acceleration: 0.,
+                    remove_turn: 1.,
+                    turn: 0.,
+                },
+            ];
+
+            return POSSIBLE_ACTIONS
+                .iter()
+                .map(|action| {
+                    let mut input_values_iter = self.input_values.iter_mut();
+
+                    for intersection in dirs {
+                        *input_values_iter.next().unwrap() =
+                            convert_dir(&self.params, *intersection);
+                    }
+
+                    for y in &internals.to_f32() {
+                        *input_values_iter.next().unwrap() = *y;
+                    }
+
+                    let mut car = simulation_vars.car.clone();
+                    let walls = &simulation_vars.walls;
+                    let params_phys = &simulation_vars.params_phys;
+                    let precomputed_dirs = &simulation_vars.dirs;
+                    car.process_input(action, params_phys);
+
+                    for i in 0..params_phys.steps_per_time {
+                        let time = params_phys.time / params_phys.steps_per_time as f32;
+                        car.apply_wheels_force(&mut |_, _, _| {}, params_phys);
+                        for wall in *walls {
+                            car.process_collision(wall, params_phys);
+                        }
+                        car.step(time, params_phys);
+                    }
+
+                    for (precomputed_dir, dir) in precomputed_dirs.iter().zip(dirs.iter()) {
+                        let dir_pos = car.from_local_coordinates(*precomputed_dir);
+                        let origin = car.get_center();
+                        let mut intersection = None;
+                        for wall in *walls {
+                            let temp = wall.intersect_ray(origin, dir_pos);
+                            intersection = intersection.any_or_both_with(temp, |a, b| a.min(b));
+                        }
+                        *input_values_iter.next().unwrap() =
+                            convert_dir(&self.params, intersection);
+                        *input_values_iter.next().unwrap() =
+                            convert_dir(&self.params, intersection)
+                                - convert_dir(&self.params, *dir);
+                    }
+
+                    for y in &car.get_internal_values().to_f32() {
+                        *input_values_iter.next().unwrap() = *y;
+                    }
+
+                    assert!(input_values_iter.next().is_none());
+
+                    let values = self.nn.calc(&self.input_values);
+
+                    (action, values[0])
+                })
+                .max_by(|(_, value1), (_, value2)| value1.partial_cmp(value2).unwrap())
+                .unwrap()
+                .0
+                .clone();
+        }
+
         self.calc_counts += 1;
 
         self.calc_input_vector(
@@ -1489,6 +1650,7 @@ impl CarSimulation {
             &[Option<f32>],
             &InternalCarValues,
             f32,
+            SimulationVars,
         ) -> CarInput,
         drift_observer: &mut impl FnMut(usize, Vec2, f32),
         observe_car_forces: &mut impl FnMut(&Car),
@@ -1521,6 +1683,12 @@ impl CarSimulation {
             &self.dirs_values_second_layer,
             &self.car.get_internal_values(),
             self.reward_path_processor.get_current_segment_f32(),
+            SimulationVars {
+                car: &self.car,
+                walls: &self.walls,
+                params_phys,
+                dirs: &self.dirs,
+            },
         );
         self.car.process_input(&input, params_phys);
         self.prev_penalty = self.penalty;
@@ -1766,11 +1934,11 @@ impl TrackEvaluation {
     // from 0 to 1
     fn to_f32_second_way(&self) -> f32 {
         (1. / (1. + self.penalty)
-            + (1. - 1. / (1. + self.reward))
+            // + (1. - 1. / (1. + self.reward))
             + self.early_finish_percent
             + self.distance_percent
             + self.autoencoder_loss)
-            / 6.
+            / 5.
     }
 }
 
@@ -1797,7 +1965,6 @@ pub fn eval_nn(
     let params_sim = patch_params_sim(params, params_sim);
     let params_phys = params_sim.patch_physics_parameters(params_phys.clone());
 
-    let mut result: Vec<TrackEvaluation> = Default::default();
     let tracks: Vec<Track> = get_all_tracks()
         .into_iter()
         .map(|x| points_storage_to_track(x))
@@ -1817,15 +1984,16 @@ pub fn eval_nn(
         })
         .collect();
 
-    for (
+    let ffn = |(
         track_no,
         Track {
             name,
             walls,
             rewards,
         },
-    ) in tracks.into_iter().enumerate()
-    {
+    )| {
+        let mut result: Vec<TrackEvaluation> = Default::default();
+
         let car_positions =
             if params_sim.start_places_enable && params_sim.start_places_for_tracks[&name] {
                 rewards.len() - 1
@@ -1899,7 +2067,8 @@ pub fn eval_nn(
                               dirs,
                               dirs_second_layer,
                               internals,
-                              current_segment_f32| {
+                              current_segment_f32,
+                              simulation_vars| {
                             nn_processor.process(
                                 time,
                                 dist,
@@ -1909,6 +2078,7 @@ pub fn eval_nn(
                                 current_segment_f32,
                                 internals,
                                 &params_sim,
+                                simulation_vars,
                             )
                         },
                         &mut |_, _, _| (),
@@ -1944,8 +2114,18 @@ pub fn eval_nn(
                 });
             }
         }
+        result.into_iter()
+    };
+
+    if ONE_THREADED {
+        tracks.into_iter().enumerate().flat_map(ffn).collect()
+    } else {
+        tracks
+            .into_par_iter()
+            .enumerate()
+            .flat_map_iter(ffn)
+            .collect()
     }
-    result
 }
 
 fn from_f64_to_f32_vec(pos: &[f64]) -> Vec<f32> {
@@ -2593,6 +2773,9 @@ impl Default for NnParameters {
             max_segments: 20,
 
             pass_time_mods: vec![],
+
+            use_ranking_network: false,
+            ranking_hidden_layers: vec![6],
         }
     }
 }
@@ -3065,7 +3248,8 @@ fn eval_tracks_dirs(
                       dirs,
                       dirs_second_layer,
                       internals,
-                      current_segment_f32| {
+                      current_segment_f32,
+                      simulation_vars| {
                     result.0.last_mut().unwrap().0.push(Dirs(dirs.to_vec()));
                     nn_processor.process(
                         time,
@@ -3076,6 +3260,7 @@ fn eval_tracks_dirs(
                         current_segment_f32,
                         internals,
                         &params_sim,
+                        simulation_vars,
                     )
                 },
                 &mut |_, _, _| (),
@@ -3387,16 +3572,74 @@ pub fn evolution() {
 
     let mut params_sim_copy = params_sim.clone();
 
-    params_sim.simulation_stop_penalty.value = 2000.;
+    #[rustfmt::skip]
+    let input = vec![0.6738715, 1.3962375, -9.709969, -4.230642, -3.2676506, 4.8991504, 2.1108444, 10.450238, 8.088549, 0.50729334, -18.5119, 0.480514, -4.8349433, -11.2844095, -1.3844314, 1.4876034, 7.716983, -1.9619504, 0.052436914, -2.3475382, 5.768196, 6.2214384, -0.039991844, -6.6355953, -1.9093088, -1.6380897, -1.2529079, 2.1773398, -3.755879, -5.2469406, -3.3197396, -0.78104776, -5.0967484, -0.5678563, 7.521401, -15.174174, -3.9670808, -4.3771453, -15.471053, 3.721583, -0.7741944, -1.5156367, 5.740673, 0.32964358, 10.183514, 3.565154, -11.03147, 3.1263359, 6.9440174, 1.8576188, 15.882395, 10.648385, 7.9288163, -7.163074, -7.1614885, 9.041861, -1.8697565, 4.051439, 1.6114315, 4.6583066, -2.336989, -5.8087296, 0.6867051, 2.2763133, 0.022993434, 6.8953013, -6.3628225, 0.6505885, 0.63723874, -1.5032864, -0.31809494, -8.800018, -6.537378, 1.7357835, -6.0556755, 0.45933804, -7.503247, 6.7944207, 2.2170389, 8.29003, 2.2948947, 7.441893, 1.4637926, -5.7660832, 0.77774525, 9.301701, -12.705781, 3.8497784, 0.36084002, -4.947007, -3.5362866, 0.9230598, 8.213377, 1.028692, 0.06970441, 10.69342, 5.4226193, 0.35453978, 3.238097, -8.675721, -0.7991422, -5.3843412, -2.3975177, -12.104445, -6.1785636, 4.250744, -2.3712895, 2.9084098, -1.4647075, 11.217567, 7.9854937, -3.453878, 0.36347595, -7.904556, 5.1204815, 3.7474253, 1.1802336, -4.8779154, 6.036164, -4.2707524, 1.1436768, 2.6914713, 12.895648, 0.73372704, -6.678311, 8.248247, -5.9110055, 7.3122635, -7.690391, 12.582394, 2.257427, 11.796972, -5.4697948, 4.311518, -4.2042828, -3.3321474, -2.365094, -6.204951, -0.111704774, 3.2974808, 5.3967466, -0.3612317, -12.495264, 3.2147114, 2.5028021, -10.717106, -6.984461, 5.6015882, 2.839644, -0.96129626, -5.0600686, -4.7290306, 1.6347486, 0.17619619, 5.667323, 1.1224418, 1.7603192, -3.2291133, -17.77918, 3.7826953, -8.318663, 5.523494, -14.4559765, -0.32160738, 0.41269335, -14.409108, 1.7315196, -3.394852, 2.1009831, 3.1736698, -1.3285139, -1.6421064, -4.875844, 4.236841, 6.7807064, 9.338122, -4.356945, 0.49719056, 1.2529842, 5.4636097, -7.306507, 0.31483808, 3.084046, -8.3597145, -0.57200867, -1.7412217, 7.0985913, -2.6089218, -8.155095, 3.5816824, -2.449088, -5.0449896, -6.69862, 5.1846147, 4.1971545, -7.2106786, -0.5595767, 5.7564073, -7.161097, -3.6338475, 0.6429556, 4.877759, -6.042184, -3.9485717, -11.746075, 0.34487122, 8.859, -5.645634, -3.8512864, -3.079258, -12.133314, 6.4503703, -4.8906627, -5.9239416, 2.7629216, -5.972483, 3.2272227, -3.918746, 1.1683934, 0.7593199, 1.7962141, -6.3846965, 5.819411, 3.2576718, -1.3861779, 0.009636184, 2.6093872, -0.38392022, 6.8437643, 0.6078342, 7.03835, -8.964784, 3.6592817, -0.6676009, -0.35108447, -9.956499, -6.9970856, -3.549926, -8.028021, -4.7959075, 3.335188, -7.8962917, -10.882255, 5.267296, 6.4303236, -0.86066014, 5.057058, -1.1721102, 4.3153934, 6.2748747, -4.4899716, 6.363882, -1.9624325, 0.7796869, 2.8663805, 9.4819145, 0.8457912, -12.272658, 0.48730576, -12.598691, -6.3082957, 2.5982032, 2.5547955, -4.1446986, 3.2683392, 5.4278398, 9.001255, -9.3119955, -9.177208, 7.8054194, 6.670474, -1.4150115, -6.012771, -6.961443, 0.23287638, 0.42331907, -5.4000406, 2.6040766, 2.313967, 2.2828512, -0.17408733, 1.3877892, -8.418374, -1.1286818, 6.9635353, 0.3188041, 10.748581, 3.6848304, 9.230947, -0.12724033, -4.108149, 2.0885513, 1.6309887, 1.1156834, 6.707361, -3.6627262, -6.4920697, 0.13680422, -9.278443, 2.2974968, 7.619677, 5.7793436, 5.146217, -4.156317, 9.467098, -5.778484, -1.8848257, -8.346977, 8.019962, 10.038042, 8.982399, 7.7225413, 11.076224, -3.0284455, -6.3276963, -12.057372, -3.9442973, -5.6489196, -4.9268017, 3.8206322, 1.1970876, 7.072864, -2.459823, 6.127094, -12.714812, 0.6546931, 0.92610204, -2.2722116, -1.2640625, 11.366784, -10.431747, -7.4916573, -3.16176, -2.3829615, -3.0428858, 4.205239, 2.6928093, 6.046191, 6.2147436, -7.5239286, 2.9150157, -3.6168456, 6.5422955, 10.428736, 3.8776603, -8.015833, 5.3989463, -2.0266063, -7.1585774, -11.922148, -0.82644176, -2.0668254, -2.876186, 2.1092627, -2.4665015, -5.4396486, 4.628618, -5.641155, 6.9669733, -4.533144, -16.067842, 3.4714723, -8.334372, 2.938648, 4.0280724, -1.1693623, -11.070127, -0.74707437, -1.0486817, 3.1873343, -9.950971, -9.031637, 17.71806, -11.161386, 0.99262726, 3.5523226, -1.1323831, 0.22481433, 2.275123, 9.166289, 3.900746, -2.862967, -5.1764283, -8.35151, 0.37135583, -1.6255641, -0.032845207, -4.610136, -4.209204, 16.591026, 10.373624, -7.9896774, 4.5687447, -8.53435, 0.34964928, -2.9510033, 4.2848344, 13.116221, 6.352876, 3.4352124, -0.14823785, 0.25068462, -4.004348, -11.196231, -0.2874741, 6.624616, 2.8403475, 4.8818755, -11.8892565, -9.939011, -12.098582, -0.64249086, 6.4809756, -5.2674246, -2.994317, -1.3270046, -3.2846994, -0.24998243, 4.216144, -8.607953, -0.85697645, -8.015713, 4.1492796, 1.5119101, -1.1941965, -4.6170983, -10.110891, 1.0302607, -1.6220341, -0.43495977, 0.500797, 1.6730058, 1.0254459, 0.07864116, 6.3756704, -7.484386, 0.8378514, -8.570443, -4.393791, 2.106032, -5.6512403, -5.610057, -7.832937, -9.653405, -4.151795, -3.2778904, 1.1567644, -1.4021993, 1.8537433, 9.47908, -2.1099195, 11.487564, 3.992513, -5.2398105, 1.0303276, -6.5170403, -3.2477758, -1.0098257, 1.1901696, -6.5265203, -11.270964, -0.054669544, 9.822261, -5.2556977, 3.349265, 12.356305, 10.311793, 2.719666, -13.922078, 5.0607657, 4.3269887, -13.458885, 9.801892, -8.359823, 3.3954253, 0.325571, 2.3993316, 2.2144196, 5.702282, -4.231979, 4.7727413, 4.6621985, -10.61038, -6.1670327, 8.1245, 2.358152, -1.0311686, -9.832273, 7.2184277, -1.8040428, -6.2133455, -9.28476, 1.0713037, 11.15517, -1.2938684, 6.6882772, 0.52386546, -4.808851, 7.2910113, -1.8336754, -5.7920313, 0.12475824, -0.8097051, -3.822063, -4.706221, 0.26966828, 8.072553, 0.19075319, 1.0390017, -1.9806764, 2.0115683, 2.6446826, 2.3741515, 3.4480588, -9.380573, -1.2658017, 7.009859, 2.2639198, 1.2822767, 4.1514473, -5.7523236, -3.268694, 8.9077215, 4.0111794, 4.056735, -5.5720053, -0.9381929, 6.539324, -3.3424828, 3.7140653, 4.6977053, -3.9671173, 4.345394, 1.6373153, 3.046059, 3.9385967, 0.55000466, 8.174156, -2.3521214, -3.2224913, -3.8069167, 0.61029464, -1.2425714, 1.7699536, 8.560754, 1.405405, 3.3751774, -6.3295155, -1.5361547, 3.7462378, -0.6373796, 9.896731, 9.707323, 3.1303754, -4.9335017, -1.1532115, -9.257265, 4.187131, 3.5619738, 6.86471, -6.5316296, -6.7160306, -1.8332678, 1.2182236, 3.7553535, -3.1426256, -2.3777232, -12.228059, 8.446975, 0.6911875, 13.005052, -2.8603888, 6.343339, 9.834011, -2.7853923, 10.171492, 5.807957, -7.2283587, -6.192022, -3.5501425, -3.252275, -8.201218, -6.4209642, -5.775359, -8.691218, -5.83, -2.1448958, -0.5844958, -6.557204, -12.0022335, -4.4206324, 3.0301588, -4.6706266, 11.24643, -2.6479974, -7.442976, -3.979046, 4.461193, -1.5340668, 7.1464524, 1.0320016, -9.276143, -0.18155181, -0.7603979, -2.3123596, -0.11147067, -4.2938538, 12.923013, 6.6453643, 11.234474, 3.912316, 1.4529525, -4.4720254, -4.019155, -1.3242787, 0.10020086, -10.338614, 1.06701, -4.14226, -7.0309515, -6.435373, -2.6474764, -3.3250067, -8.156043, -0.024789132, -8.864347, 11.723535, 1.011791, -0.9775961, -6.261484, 3.2945123, -8.516468, 0.48645186, 10.532079, -2.4773521, -3.5174398, -3.8881316, -4.4456844, 8.762048, 2.3198946, -6.5467415, -4.1247945, -5.1098723, -0.92861164, 2.5971859, 4.270702, 0.67311597, 3.0782294, -7.9665346, -7.778015, -6.5079036, -2.3372808, -1.1086447, 1.3334146, 5.313313, 5.5396605, -0.8845387, 3.642151, 0.17856163, -9.458064, 4.703637, -5.177733, -6.533986, 0.11077616, -6.1123667, 1.0119509, -3.2709632, 1.5315372, -5.9039574, -1.9154682, 0.63521624, 4.1084967, 0.20591778, 0.16088028, 1.0014832, 3.4770222, 4.505648, 7.4210863, 0.9920085, 6.4650517, -3.286229, 4.00343, -3.4254344, -0.7693688, -3.6278143, 4.8354473, 0.4476805, -9.335662, -8.961105, -4.027863, -2.308868, -6.6420712, -10.731946, 2.1924844, -0.7884905, 5.9276495, -7.240472, -9.2087, -1.631058, -7.5621057, -4.711686, -3.4083626, -3.0844975, -7.4984922, 6.4751377, -2.5670013, -3.6147892, -3.337315, -1.4617364, 4.127257, -2.469072, 12.72022, 2.5541582, 1.182711, 5.739586, 1.5758116, -1.0468379, 0.5204578, -5.879354, 0.5365463, -3.624002, -0.34282434, -1.2316997, 5.9598393, -2.1030006, -1.4017736, 0.4112153, -2.9103777, -9.999597, -4.4700427, 2.4884741, 6.0900283, 6.4103513, -0.82919776, 5.101978, -7.4778614, 11.083736, 9.09637, 3.1157615, -7.07785, 5.028301, -3.6747553, -3.7659705, 6.7654552, 2.0573092, 0.6338553, 6.34328, -6.047862, -0.5955341, -5.090883, -10.698972, -0.99924344, -2.3775327, -2.4674616, 0.70818084, -2.4881525, 2.9095998, -9.855811, -0.57291234, 7.709623, 7.917493, -1.5765494, 12.528931, 8.3131, 17.14767, -0.7353941, -3.4648402, -0.86669195, 2.204483, 0.91970766, -0.21738544, 4.9712753, -0.9543555, 2.7695718, 4.298482, -4.518572, 8.71062, 2.354512, -4.0580378, 0.3128378, 8.260591, -3.227196, -1.468644, -0.9634521, -0.22802265, -6.0204988, -3.161431, 0.4183467, -5.6339564, -1.793592, -10.931556, 0.9016953, -4.6181116, 0.34925088, -7.3069196, -0.68601143, -5.3798437, -7.2715106, 6.4609756, -2.331606, 2.559343, 0.74353397, 4.7186437, -1.3672069, 3.7938619, -1.6476473, -2.3876286, 0.9800127, 4.8672266, -3.5541766, 1.6889145, -5.3168917, 5.225214, 5.786194, -3.6943362, 3.1404045, 1.5667737, -6.53754, 10.655074, 1.9665438, -2.6710315, -7.2964478, -0.06155831, -1.0515051, -3.8465307, 0.31120464, -2.2075243, 3.758048, 16.740057, -3.242626, -0.78621596, -1.7105806, -6.1364746, -12.045445, -9.317872, 1.6534698, -7.982636, 1.2758802, 0.44874343, 8.249254, 7.665387, -3.6444862, -1.458851, 3.0724099, 5.237047, 2.2367852, -4.628819, 2.2844563, -3.5600092, 5.6040626, 4.6064377, 5.8036313, 2.516544, -7.1462293, 0.61613363, -2.252139, -8.564062, -2.4067917, -1.1110994, -5.679913, -3.802304, -2.1357374, -1.8486506, 1.4200228, 0.25348327, -4.3411922, 11.874627, 7.6119967, -0.38366476, 6.3590417, 5.103949, 4.770087, 0.9576347, 4.8307853, -2.8504584, 4.3833103, -2.8354442, 3.0878096, -0.7844884, 0.81957394, 9.729682, -1.7481557, -0.04654137, 1.0249834, -7.8602133, -6.2685456, 1.8640699, -6.221731, -2.7769165, 10.108798, -0.5519361, 1.6500386, 7.2599587, -3.049358, 2.7386358, -4.051545, 6.6098676, -1.0050513, -12.044271, 0.79388875, -2.9755988, -3.168039];
+
+    params_sim.disable_track("turn_right_smooth");
+    params_sim.disable_track("straight");
+    params_sim.disable_all_tracks();
+    params_sim.enable_track("complex");
     params_sim.simulation_simple_physics = 0.0;
-    params_sim.nn.pass_dirs_diff = true;
-    params_sim.nn.pass_internals = true;
-    params_sim.nn.hidden_layers = vec![10];
-    test_python_nn(&params_sim, &params_phys);
+    // params_sim.tracks_enable_mirror = false;
+    params_sim.nn.use_ranking_network = true;
+    // params_sim.simulation_stop_penalty.value = 0.1;
+    params_sim.nn.ranking_hidden_layers = vec![10, 5];
+    params_sim.simulation_steps_quota = 3500;
+    params_sim.eval_add_other_physics = vec![
+        //     PhysicsPatch {
+        //         traction: Some(0.15),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(0.5),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(0.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        PhysicsPatch {
+            acceleration_ratio: Some(1.0),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            acceleration_ratio: Some(0.6),
+            ..PhysicsPatch::default()
+        },
+    ];
+    save_runs(
+        vec![evolve_by_cma_es_custom(
+            &params_sim,
+            &params_phys,
+            // &random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.),
+            &input,
+            30,
+            300,
+            Some(0.1),
+            None,
+        )],
+        "ranking_network6",
+    );
 
     return;
 
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_default_another_step");
+    params_sim.simulation_simple_physics = 0.0;
+    params_sim.start_places_enable = true;
+    params_sim.start_places_disable_all_tracks();
+    params_sim.start_places_enable_track("complex");
+    params_sim.start_places_enable_track("turn_left_90");
+    params_sim.start_places_enable_track("turn_left_180");
+    params_sim.evolution_generation_count = 300;
+    params_sim.evolution_population_size = 30;
+    test_params_sim(&params_sim, &params_phys, "nn2_default_places_hard_physics");
     params_sim = params_sim_copy.clone();
 
     return;

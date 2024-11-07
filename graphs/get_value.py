@@ -33,7 +33,7 @@ def read_json_file(file_path):
 
 # ----------------------------------------------------------------------------
 
-data = read_json_file("ranking_network5.json")
+data = read_json_file("nn2_output_discrete_action.json")
 
 # data = sorted(data, key=lambda x: x[80]["evals_cost"])
 for i, run in enumerate(data):

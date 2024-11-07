@@ -158,46 +158,50 @@ impl Default for TemplateApp {
         params_sim.simulation_enable_random_nn_output = false;
         params_sim.simulation_simple_physics = 0.;
 
-        params_sim.nn.pass_dirs_diff = true;
-        params_sim.nn.pass_internals = true;
-        params_sim.nn.hidden_layers = vec![20, 10];
+        // params_sim.nn.pass_dirs_diff = true;
+        // params_sim.nn.pass_internals = true;
+        // params_sim.nn.hidden_layers = vec![20, 10];
 
-        // params_sim.simulation_stop_penalty.value = 1.;
+        // // params_sim.simulation_stop_penalty.value = 1.;
+        // params_sim.simulation_simple_physics = 0.0;
+        // // params_sim.tracks_enable_mirror = false;
+        // params_sim.nn.use_ranking_network = true;
+        // // params_sim.simulation_stop_penalty.value = 0.1;
+        // params_sim.nn.ranking_hidden_layers = vec![10, 5];
+        // params_sim.eval_add_other_physics = vec![
+        //     PhysicsPatch {
+        //         traction: Some(0.15),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(0.5),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(0.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         acceleration_ratio: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         acceleration_ratio: Some(0.6),
+        //         ..PhysicsPatch::default()
+        //     },
+        // ];
+
+        params_sim.nn.output_discrete_action = true;
+        params_sim.nn.pass_dirs_diff = true;
         params_sim.simulation_simple_physics = 0.0;
-        // params_sim.tracks_enable_mirror = false;
-        params_sim.nn.use_ranking_network = true;
-        // params_sim.simulation_stop_penalty.value = 0.1;
-        params_sim.nn.ranking_hidden_layers = vec![10, 5];
-        params_sim.eval_add_other_physics = vec![
-            PhysicsPatch {
-                traction: Some(0.15),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                traction: Some(0.5),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                traction: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                friction_coef: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                friction_coef: Some(0.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                acceleration_ratio: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                acceleration_ratio: Some(0.6),
-                ..PhysicsPatch::default()
-            },
-        ];
 
         Self {
             rng: StdRng::seed_from_u64(42),

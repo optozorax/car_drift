@@ -94,6 +94,7 @@ pub struct NnParameters {
     pub use_ranking_network: bool,
     pub ranking_hidden_layers: Vec<usize>,
     pub rank_without_physics: bool,
+    pub rank_close_to_zero: bool,
 
     pub output_discrete_action: bool,
 }
@@ -172,6 +173,8 @@ pub struct SimulationParameters {
     pub simulation_enable_random_nn_output: bool,
     pub simulation_random_output_range: f32,
     pub simulation_use_output_regularization: bool,
+    pub simulation_random_output_second_way: bool,
+    pub random_output_probability: f32,
 
     pub evolution_sample_mean: bool,
     pub evolution_generation_count: usize,
@@ -257,13 +260,13 @@ impl NnParameters {
     const CAR_INPUT_SIZE: usize = InternalCarValues::SIZE;
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
     const CAR_OUTPUT_SIZE_CONVERTED: usize = 4;
-    const POSSIBLE_ACTIONS_COUNT: usize = 11;
+    const POSSIBLE_ACTIONS_COUNT: usize = POSSIBLE_ACTIONS.len();
 
     pub fn get_ranking_input_size(&self) -> usize {
         if self.rank_without_physics {
             Self::CAR_INPUT_SIZE + self.dirs_size * 2 + Self::CAR_OUTPUT_SIZE_CONVERTED
         } else {
-            Self::CAR_INPUT_SIZE * 2 + self.dirs_size * 3
+            Self::CAR_INPUT_SIZE * 2 + self.dirs_size * 3 + Self::CAR_OUTPUT_SIZE_CONVERTED
         }
     }
 
@@ -392,6 +395,10 @@ impl SimulationParameters {
 
         ui.label("Mutate car angle range:");
         self.mutate_car_angle_range.ui(ui);
+        ui.end_row();
+
+        ui.label("Random output probability:");
+        egui_0_1(ui, &mut self.random_output_probability);
         ui.end_row();
 
         ui.separator();
@@ -1185,6 +1192,63 @@ pub struct SimulationVars<'a> {
     dirs: &'a [Pos2],
 }
 
+pub const POSSIBLE_ACTIONS: [CarInput; 9] = [
+    CarInput {
+        brake: 0.,
+        acceleration: 0.,
+        remove_turn: 0.,
+        turn: 0.,
+    },
+    CarInput {
+        brake: 1.,
+        acceleration: 0.,
+        remove_turn: 0.,
+        turn: 0.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 1.,
+        remove_turn: 0.,
+        turn: 0.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 0.,
+        remove_turn: 1.,
+        turn: 0.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 0.,
+        remove_turn: 0.,
+        turn: 1.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 0.,
+        remove_turn: 0.,
+        turn: -1.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 1.,
+        remove_turn: 0.,
+        turn: 1.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 1.,
+        remove_turn: 0.,
+        turn: -1.,
+    },
+    CarInput {
+        brake: 0.,
+        acceleration: 1.,
+        remove_turn: 1.,
+        turn: 0.,
+    },
+];
+
 impl NnProcessor {
     pub fn new_zeros(nn_params: NnParameters, simple_physics: f32, current_track: usize) -> Self {
         Self {
@@ -1349,74 +1413,6 @@ impl NnProcessor {
         params_sim: &SimulationParameters,
         simulation_vars: SimulationVars,
     ) -> CarInput {
-        const POSSIBLE_ACTIONS: [CarInput; 11] = [
-            CarInput {
-                brake: 0.,
-                acceleration: 0.,
-                remove_turn: 0.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 1.,
-                acceleration: 0.,
-                remove_turn: 0.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 1.,
-                remove_turn: 0.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: -1.,
-                remove_turn: 0.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 0.,
-                remove_turn: 1.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 0.,
-                remove_turn: 0.,
-                turn: 1.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 0.,
-                remove_turn: 0.,
-                turn: -1.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 1.,
-                remove_turn: 0.,
-                turn: 1.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 1.,
-                remove_turn: 0.,
-                turn: -1.,
-            },
-            CarInput {
-                brake: 0.,
-                acceleration: 1.,
-                remove_turn: 1.,
-                turn: 0.,
-            },
-            CarInput {
-                brake: 1.,
-                acceleration: 0.,
-                remove_turn: 1.,
-                turn: 0.,
-            },
-        ];
         if self.params.use_ranking_network {
             let result = POSSIBLE_ACTIONS
                 .iter()
@@ -1432,16 +1428,16 @@ impl NnProcessor {
                         *input_values_iter.next().unwrap() = *y;
                     }
 
+                    *input_values_iter.next().unwrap() = action.brake;
+                    *input_values_iter.next().unwrap() = action.acceleration;
+                    *input_values_iter.next().unwrap() = action.remove_turn;
+                    *input_values_iter.next().unwrap() = action.turn;
+
                     if self.params.rank_without_physics {
                         for (prev, current) in self.prev_dirs.iter().zip(dirs.iter()) {
                             *input_values_iter.next().unwrap() = convert_dir(&self.params, *prev)
                                 - convert_dir(&self.params, *current);
                         }
-
-                        *input_values_iter.next().unwrap() = action.brake;
-                        *input_values_iter.next().unwrap() = action.acceleration;
-                        *input_values_iter.next().unwrap() = action.remove_turn;
-                        *input_values_iter.next().unwrap() = action.turn;
                     } else {
                         let mut car = simulation_vars.car.clone();
                         let walls = &simulation_vars.walls;
@@ -1485,7 +1481,11 @@ impl NnProcessor {
 
                     (action, values[0])
                 })
-                .max_by(|(_, value1), (_, value2)| value1.partial_cmp(value2).unwrap())
+                .max_by(|(_, value1), (_, value2)| if self.params.rank_close_to_zero {
+                    value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
+                } else {
+                    value1.partial_cmp(value2).unwrap()
+                })
                 .unwrap()
                 .0
                 .clone();
@@ -1719,7 +1719,7 @@ impl CarSimulation {
             *value_second_layer = intersections.1;
         }
 
-        let input = get_input(
+        let mut input = get_input(
             self.time_passed,
             self.reward_path_processor.distance_percent(),
             self.penalty - self.prev_penalty,
@@ -1734,6 +1734,11 @@ impl CarSimulation {
                 dirs: &self.dirs,
             },
         );
+
+        let mut rng = thread_rng();
+        if rng.gen_range(0.0..1.0) < params_sim.random_output_probability {
+            input = POSSIBLE_ACTIONS[rng.gen_range(0..POSSIBLE_ACTIONS.len())].clone();
+        }
         self.car.process_input(&input, params_phys);
         self.prev_penalty = self.penalty;
 
@@ -2377,7 +2382,7 @@ pub fn evolve_by_cma_es_custom(
 
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
-    let mut state = cmaes::options::CMAESOptions::new(input_done, step_size.unwrap_or(10.))
+    let mut state = cmaes::options::CMAESOptions::new(input_done, step_size.unwrap_or(1.))
         .population_size(population_size)
         .cm(params_sim.evolution_learning_rate)
         .sample_mean(params_sim.evolution_sample_mean)
@@ -2824,6 +2829,7 @@ impl Default for NnParameters {
             use_ranking_network: false,
             ranking_hidden_layers: vec![6],
             rank_without_physics: false,
+            rank_close_to_zero: false,
 
             output_discrete_action: false,
         }
@@ -2892,6 +2898,8 @@ impl Default for SimulationParameters {
             simulation_enable_random_nn_output: false,
             simulation_random_output_range: 0.1,
             simulation_use_output_regularization: false,
+            simulation_random_output_second_way: true,
+            random_output_probability: 0.0,
 
             evolution_sample_mean: false,
             evolution_generation_count: 100,
@@ -3110,7 +3118,7 @@ fn random_input_by_len(len: usize, limit: f32) -> Vec<f32> {
 }
 
 fn random_input(params_sim: &SimulationParameters) -> Vec<f32> {
-    random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 10.)
+    random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.)
 }
 
 fn test_params_sim_fn<
@@ -3130,13 +3138,20 @@ fn test_params_sim_fn<
 ) {
     let now = Instant::now();
     let map_lambda = |_| {
-        f(
+        let start = Instant::now();
+        let result = f(
             params_sim,
             params_phys,
             &random_input(params_sim),
             POPULATION_SIZE,
             GENERATIONS_COUNT,
-        )
+        );
+        println!(
+            "FINISH! Time: {:?}, score: {}",
+            start.elapsed(),
+            result.last().unwrap().evals_cost
+        );
+        result
     };
 
     let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
@@ -3151,28 +3166,22 @@ fn test_params_sim_fn<
 }
 
 fn test_params_sim(params_sim: &SimulationParameters, params_phys: &PhysicsParameters, name: &str) {
-    let now = Instant::now();
-    let map_lambda = |_| {
-        evolve_by_cma_es_custom(
-            &params_sim,
-            &params_phys,
-            &random_input(params_sim),
-            params_sim.evolution_population_size,
-            params_sim.evolution_generation_count,
-            Some(params_sim.evolution_distance_to_solution),
-            None,
-        )
-    };
-
-    let result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
-        (0..RUNS_COUNT).into_iter().map(map_lambda).collect()
-    } else {
-        (0..RUNS_COUNT).into_par_iter().map(map_lambda).collect()
-    };
-
-    save_runs(result, name);
-
-    println!("For `{}`, time: {:?}", name, now.elapsed());
+    test_params_sim_fn(
+        params_sim,
+        params_phys,
+        name,
+        |params_sim, params_phys, input, population_size, generations_count| {
+            evolve_by_cma_es_custom(
+                params_sim,
+                params_phys,
+                input,
+                params_sim.evolution_population_size,
+                params_sim.evolution_generation_count,
+                Some(params_sim.evolution_distance_to_solution),
+                None,
+            )
+        },
+    )
 }
 
 fn test_params_sim_differential_evolution(
@@ -3635,6 +3644,61 @@ fn interpolate_two_nns(params_sim: &SimulationParameters, params_phys: &PhysicsP
     save_json_to_file(&data, "interpolation_data.json");
 }
 
+fn evaluate_noise(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
+    let mut params_sim = params_sim.clone();
+
+    #[rustfmt::skip]
+    let params = vec![];
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true; // better than using physics 🥲
+    // params_sim.nn.output_discrete_action = true;
+
+    params_sim.nn.ranking_hidden_layers = vec![10, 10];
+    params_sim.simulation_simple_physics = 0.0;
+    params_sim.simulation_stop_penalty.value = 50.;
+    params_sim.tracks_enable_mirror = false;
+    params_sim.simulation_random_output_second_way = true;
+
+    let runs_amount = 300;
+    let t_amount = 50;
+    let data = (0..runs_amount).into_par_iter().map(|i| {
+        let mut params_sim = params_sim.clone();
+        let now = Instant::now();
+        let mut data_row: Vec<(f32, f32)> = vec![];
+        for t in (0..=t_amount).map(|x| x as f32 / t_amount as f32 / 2.) {
+            params_sim.random_output_probability = t;
+            let evals = eval_nn(&params, &params_phys, &params_sim);
+            let cost = sum_evals(&evals, &params_sim, true);
+
+            data_row.push((t, cost));
+        }
+        println!("{i}, time: {:?}", now.elapsed());
+        data_row
+    }).collect::<Vec<_>>();
+    // save_json_to_file(&data, "graphs/graphs_to_copy/interpolation_data_actor_predictor.json");
+    save_json_to_file(&data, "graphs/graphs_to_copy/interpolation_data_ranker.json");
+}
+
+fn eval_nn_from_python(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
+    let mut params_sim = params_sim.clone();
+
+    let mut params = read_nn_from_file("records/neural_network_actor.json");
+    params.push(0.);
+    params_sim.nn.pass_dirs_diff = true;
+    params_sim.nn.output_discrete_action = true;
+    params_sim.nn.hidden_layers = vec![16];
+    params_sim.simulation_simple_physics = 0.0;
+    params_sim.simulation_stop_penalty.value = 50.;
+    let evals = eval_nn(&params, &params_phys, &params_sim);
+    print_evals(&evals);
+}
+
+fn read_nn_from_file(file_path: &str) -> Vec<f32> {
+    let file = std::fs::read_to_string(file_path).unwrap();
+    let nn: NeuralNetworkUnoptimized = serde_json::from_str(&file).unwrap();
+    nn.to_optimized().get_values().iter().copied().collect()
+}
+
 pub fn evolution() {
     let mut params_sim = SimulationParameters::default();
     let mut params_phys = PhysicsParameters::default();
@@ -3660,164 +3724,51 @@ pub fn evolution() {
     params_sim.nn.hidden_layers = vec![10];
     params_sim.nn.inv_distance_coef = 30.;
 
-    let mut params_sim_copy = params_sim.clone();
-
-    params_sim.nn.use_ranking_network = true;
-    params_sim.nn.rank_without_physics = true; // better than using physics 🥲
+    // new settings
     params_sim.nn.ranking_hidden_layers = vec![10];
-    params_sim.simulation_simple_physics = 0.0;
     params_sim.simulation_stop_penalty.value = 50.;
     params_sim.tracks_enable_mirror = false;
-    save_runs(
-        vec![evolve_by_cma_es_custom(
-            &params_sim,
-            &params_phys,
-            &random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.),
-            30,
-            301,
-            Some(1.),
-            None,
-        )],
-        "nn2_ranking_without_physics",
-    );
+    params_sim.nn.pass_dirs_diff = true;
+    params_sim.evolution_population_size = 30;
+    params_sim.evolution_generation_count = 30;
+    params_sim.evolution_distance_to_solution = 1.;
+
+    let mut params_sim_copy = params_sim.clone();
+    
+    test_params_sim(&params_sim, &params_phys, "hard_default");
+    params_sim = params_sim_copy.clone();
+
     return;
 
     params_sim.nn.output_discrete_action = true;
-    params_sim.nn.pass_dirs_diff = true;
-    params_sim.simulation_simple_physics = 0.0;
-    save_runs(
-        vec![evolve_by_cma_es_custom(
-            &params_sim,
-            &params_phys,
-            &random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.),
-            80,
-            201,
-            Some(1.),
-            None,
-        )],
-        "nn2_output_discrete_action",
-    );
+    test_params_sim(&params_sim, &params_phys, "hard_discrete");
+    params_sim = params_sim_copy.clone();
 
-    return;
-
-    params_sim.nn.pass_dirs_diff = true;
-    params_sim.simulation_simple_physics = 0.0;
-    interpolate_two_nns(&params_sim, &params_phys);
-
-    return;
-
-    #[rustfmt::skip]
-    let input = vec![0.6738715, 1.3962375, -9.709969, -4.230642, -3.2676506, 4.8991504, 2.1108444, 10.450238, 8.088549, 0.50729334, -18.5119, 0.480514, -4.8349433, -11.2844095, -1.3844314, 1.4876034, 7.716983, -1.9619504, 0.052436914, -2.3475382, 5.768196, 6.2214384, -0.039991844, -6.6355953, -1.9093088, -1.6380897, -1.2529079, 2.1773398, -3.755879, -5.2469406, -3.3197396, -0.78104776, -5.0967484, -0.5678563, 7.521401, -15.174174, -3.9670808, -4.3771453, -15.471053, 3.721583, -0.7741944, -1.5156367, 5.740673, 0.32964358, 10.183514, 3.565154, -11.03147, 3.1263359, 6.9440174, 1.8576188, 15.882395, 10.648385, 7.9288163, -7.163074, -7.1614885, 9.041861, -1.8697565, 4.051439, 1.6114315, 4.6583066, -2.336989, -5.8087296, 0.6867051, 2.2763133, 0.022993434, 6.8953013, -6.3628225, 0.6505885, 0.63723874, -1.5032864, -0.31809494, -8.800018, -6.537378, 1.7357835, -6.0556755, 0.45933804, -7.503247, 6.7944207, 2.2170389, 8.29003, 2.2948947, 7.441893, 1.4637926, -5.7660832, 0.77774525, 9.301701, -12.705781, 3.8497784, 0.36084002, -4.947007, -3.5362866, 0.9230598, 8.213377, 1.028692, 0.06970441, 10.69342, 5.4226193, 0.35453978, 3.238097, -8.675721, -0.7991422, -5.3843412, -2.3975177, -12.104445, -6.1785636, 4.250744, -2.3712895, 2.9084098, -1.4647075, 11.217567, 7.9854937, -3.453878, 0.36347595, -7.904556, 5.1204815, 3.7474253, 1.1802336, -4.8779154, 6.036164, -4.2707524, 1.1436768, 2.6914713, 12.895648, 0.73372704, -6.678311, 8.248247, -5.9110055, 7.3122635, -7.690391, 12.582394, 2.257427, 11.796972, -5.4697948, 4.311518, -4.2042828, -3.3321474, -2.365094, -6.204951, -0.111704774, 3.2974808, 5.3967466, -0.3612317, -12.495264, 3.2147114, 2.5028021, -10.717106, -6.984461, 5.6015882, 2.839644, -0.96129626, -5.0600686, -4.7290306, 1.6347486, 0.17619619, 5.667323, 1.1224418, 1.7603192, -3.2291133, -17.77918, 3.7826953, -8.318663, 5.523494, -14.4559765, -0.32160738, 0.41269335, -14.409108, 1.7315196, -3.394852, 2.1009831, 3.1736698, -1.3285139, -1.6421064, -4.875844, 4.236841, 6.7807064, 9.338122, -4.356945, 0.49719056, 1.2529842, 5.4636097, -7.306507, 0.31483808, 3.084046, -8.3597145, -0.57200867, -1.7412217, 7.0985913, -2.6089218, -8.155095, 3.5816824, -2.449088, -5.0449896, -6.69862, 5.1846147, 4.1971545, -7.2106786, -0.5595767, 5.7564073, -7.161097, -3.6338475, 0.6429556, 4.877759, -6.042184, -3.9485717, -11.746075, 0.34487122, 8.859, -5.645634, -3.8512864, -3.079258, -12.133314, 6.4503703, -4.8906627, -5.9239416, 2.7629216, -5.972483, 3.2272227, -3.918746, 1.1683934, 0.7593199, 1.7962141, -6.3846965, 5.819411, 3.2576718, -1.3861779, 0.009636184, 2.6093872, -0.38392022, 6.8437643, 0.6078342, 7.03835, -8.964784, 3.6592817, -0.6676009, -0.35108447, -9.956499, -6.9970856, -3.549926, -8.028021, -4.7959075, 3.335188, -7.8962917, -10.882255, 5.267296, 6.4303236, -0.86066014, 5.057058, -1.1721102, 4.3153934, 6.2748747, -4.4899716, 6.363882, -1.9624325, 0.7796869, 2.8663805, 9.4819145, 0.8457912, -12.272658, 0.48730576, -12.598691, -6.3082957, 2.5982032, 2.5547955, -4.1446986, 3.2683392, 5.4278398, 9.001255, -9.3119955, -9.177208, 7.8054194, 6.670474, -1.4150115, -6.012771, -6.961443, 0.23287638, 0.42331907, -5.4000406, 2.6040766, 2.313967, 2.2828512, -0.17408733, 1.3877892, -8.418374, -1.1286818, 6.9635353, 0.3188041, 10.748581, 3.6848304, 9.230947, -0.12724033, -4.108149, 2.0885513, 1.6309887, 1.1156834, 6.707361, -3.6627262, -6.4920697, 0.13680422, -9.278443, 2.2974968, 7.619677, 5.7793436, 5.146217, -4.156317, 9.467098, -5.778484, -1.8848257, -8.346977, 8.019962, 10.038042, 8.982399, 7.7225413, 11.076224, -3.0284455, -6.3276963, -12.057372, -3.9442973, -5.6489196, -4.9268017, 3.8206322, 1.1970876, 7.072864, -2.459823, 6.127094, -12.714812, 0.6546931, 0.92610204, -2.2722116, -1.2640625, 11.366784, -10.431747, -7.4916573, -3.16176, -2.3829615, -3.0428858, 4.205239, 2.6928093, 6.046191, 6.2147436, -7.5239286, 2.9150157, -3.6168456, 6.5422955, 10.428736, 3.8776603, -8.015833, 5.3989463, -2.0266063, -7.1585774, -11.922148, -0.82644176, -2.0668254, -2.876186, 2.1092627, -2.4665015, -5.4396486, 4.628618, -5.641155, 6.9669733, -4.533144, -16.067842, 3.4714723, -8.334372, 2.938648, 4.0280724, -1.1693623, -11.070127, -0.74707437, -1.0486817, 3.1873343, -9.950971, -9.031637, 17.71806, -11.161386, 0.99262726, 3.5523226, -1.1323831, 0.22481433, 2.275123, 9.166289, 3.900746, -2.862967, -5.1764283, -8.35151, 0.37135583, -1.6255641, -0.032845207, -4.610136, -4.209204, 16.591026, 10.373624, -7.9896774, 4.5687447, -8.53435, 0.34964928, -2.9510033, 4.2848344, 13.116221, 6.352876, 3.4352124, -0.14823785, 0.25068462, -4.004348, -11.196231, -0.2874741, 6.624616, 2.8403475, 4.8818755, -11.8892565, -9.939011, -12.098582, -0.64249086, 6.4809756, -5.2674246, -2.994317, -1.3270046, -3.2846994, -0.24998243, 4.216144, -8.607953, -0.85697645, -8.015713, 4.1492796, 1.5119101, -1.1941965, -4.6170983, -10.110891, 1.0302607, -1.6220341, -0.43495977, 0.500797, 1.6730058, 1.0254459, 0.07864116, 6.3756704, -7.484386, 0.8378514, -8.570443, -4.393791, 2.106032, -5.6512403, -5.610057, -7.832937, -9.653405, -4.151795, -3.2778904, 1.1567644, -1.4021993, 1.8537433, 9.47908, -2.1099195, 11.487564, 3.992513, -5.2398105, 1.0303276, -6.5170403, -3.2477758, -1.0098257, 1.1901696, -6.5265203, -11.270964, -0.054669544, 9.822261, -5.2556977, 3.349265, 12.356305, 10.311793, 2.719666, -13.922078, 5.0607657, 4.3269887, -13.458885, 9.801892, -8.359823, 3.3954253, 0.325571, 2.3993316, 2.2144196, 5.702282, -4.231979, 4.7727413, 4.6621985, -10.61038, -6.1670327, 8.1245, 2.358152, -1.0311686, -9.832273, 7.2184277, -1.8040428, -6.2133455, -9.28476, 1.0713037, 11.15517, -1.2938684, 6.6882772, 0.52386546, -4.808851, 7.2910113, -1.8336754, -5.7920313, 0.12475824, -0.8097051, -3.822063, -4.706221, 0.26966828, 8.072553, 0.19075319, 1.0390017, -1.9806764, 2.0115683, 2.6446826, 2.3741515, 3.4480588, -9.380573, -1.2658017, 7.009859, 2.2639198, 1.2822767, 4.1514473, -5.7523236, -3.268694, 8.9077215, 4.0111794, 4.056735, -5.5720053, -0.9381929, 6.539324, -3.3424828, 3.7140653, 4.6977053, -3.9671173, 4.345394, 1.6373153, 3.046059, 3.9385967, 0.55000466, 8.174156, -2.3521214, -3.2224913, -3.8069167, 0.61029464, -1.2425714, 1.7699536, 8.560754, 1.405405, 3.3751774, -6.3295155, -1.5361547, 3.7462378, -0.6373796, 9.896731, 9.707323, 3.1303754, -4.9335017, -1.1532115, -9.257265, 4.187131, 3.5619738, 6.86471, -6.5316296, -6.7160306, -1.8332678, 1.2182236, 3.7553535, -3.1426256, -2.3777232, -12.228059, 8.446975, 0.6911875, 13.005052, -2.8603888, 6.343339, 9.834011, -2.7853923, 10.171492, 5.807957, -7.2283587, -6.192022, -3.5501425, -3.252275, -8.201218, -6.4209642, -5.775359, -8.691218, -5.83, -2.1448958, -0.5844958, -6.557204, -12.0022335, -4.4206324, 3.0301588, -4.6706266, 11.24643, -2.6479974, -7.442976, -3.979046, 4.461193, -1.5340668, 7.1464524, 1.0320016, -9.276143, -0.18155181, -0.7603979, -2.3123596, -0.11147067, -4.2938538, 12.923013, 6.6453643, 11.234474, 3.912316, 1.4529525, -4.4720254, -4.019155, -1.3242787, 0.10020086, -10.338614, 1.06701, -4.14226, -7.0309515, -6.435373, -2.6474764, -3.3250067, -8.156043, -0.024789132, -8.864347, 11.723535, 1.011791, -0.9775961, -6.261484, 3.2945123, -8.516468, 0.48645186, 10.532079, -2.4773521, -3.5174398, -3.8881316, -4.4456844, 8.762048, 2.3198946, -6.5467415, -4.1247945, -5.1098723, -0.92861164, 2.5971859, 4.270702, 0.67311597, 3.0782294, -7.9665346, -7.778015, -6.5079036, -2.3372808, -1.1086447, 1.3334146, 5.313313, 5.5396605, -0.8845387, 3.642151, 0.17856163, -9.458064, 4.703637, -5.177733, -6.533986, 0.11077616, -6.1123667, 1.0119509, -3.2709632, 1.5315372, -5.9039574, -1.9154682, 0.63521624, 4.1084967, 0.20591778, 0.16088028, 1.0014832, 3.4770222, 4.505648, 7.4210863, 0.9920085, 6.4650517, -3.286229, 4.00343, -3.4254344, -0.7693688, -3.6278143, 4.8354473, 0.4476805, -9.335662, -8.961105, -4.027863, -2.308868, -6.6420712, -10.731946, 2.1924844, -0.7884905, 5.9276495, -7.240472, -9.2087, -1.631058, -7.5621057, -4.711686, -3.4083626, -3.0844975, -7.4984922, 6.4751377, -2.5670013, -3.6147892, -3.337315, -1.4617364, 4.127257, -2.469072, 12.72022, 2.5541582, 1.182711, 5.739586, 1.5758116, -1.0468379, 0.5204578, -5.879354, 0.5365463, -3.624002, -0.34282434, -1.2316997, 5.9598393, -2.1030006, -1.4017736, 0.4112153, -2.9103777, -9.999597, -4.4700427, 2.4884741, 6.0900283, 6.4103513, -0.82919776, 5.101978, -7.4778614, 11.083736, 9.09637, 3.1157615, -7.07785, 5.028301, -3.6747553, -3.7659705, 6.7654552, 2.0573092, 0.6338553, 6.34328, -6.047862, -0.5955341, -5.090883, -10.698972, -0.99924344, -2.3775327, -2.4674616, 0.70818084, -2.4881525, 2.9095998, -9.855811, -0.57291234, 7.709623, 7.917493, -1.5765494, 12.528931, 8.3131, 17.14767, -0.7353941, -3.4648402, -0.86669195, 2.204483, 0.91970766, -0.21738544, 4.9712753, -0.9543555, 2.7695718, 4.298482, -4.518572, 8.71062, 2.354512, -4.0580378, 0.3128378, 8.260591, -3.227196, -1.468644, -0.9634521, -0.22802265, -6.0204988, -3.161431, 0.4183467, -5.6339564, -1.793592, -10.931556, 0.9016953, -4.6181116, 0.34925088, -7.3069196, -0.68601143, -5.3798437, -7.2715106, 6.4609756, -2.331606, 2.559343, 0.74353397, 4.7186437, -1.3672069, 3.7938619, -1.6476473, -2.3876286, 0.9800127, 4.8672266, -3.5541766, 1.6889145, -5.3168917, 5.225214, 5.786194, -3.6943362, 3.1404045, 1.5667737, -6.53754, 10.655074, 1.9665438, -2.6710315, -7.2964478, -0.06155831, -1.0515051, -3.8465307, 0.31120464, -2.2075243, 3.758048, 16.740057, -3.242626, -0.78621596, -1.7105806, -6.1364746, -12.045445, -9.317872, 1.6534698, -7.982636, 1.2758802, 0.44874343, 8.249254, 7.665387, -3.6444862, -1.458851, 3.0724099, 5.237047, 2.2367852, -4.628819, 2.2844563, -3.5600092, 5.6040626, 4.6064377, 5.8036313, 2.516544, -7.1462293, 0.61613363, -2.252139, -8.564062, -2.4067917, -1.1110994, -5.679913, -3.802304, -2.1357374, -1.8486506, 1.4200228, 0.25348327, -4.3411922, 11.874627, 7.6119967, -0.38366476, 6.3590417, 5.103949, 4.770087, 0.9576347, 4.8307853, -2.8504584, 4.3833103, -2.8354442, 3.0878096, -0.7844884, 0.81957394, 9.729682, -1.7481557, -0.04654137, 1.0249834, -7.8602133, -6.2685456, 1.8640699, -6.221731, -2.7769165, 10.108798, -0.5519361, 1.6500386, 7.2599587, -3.049358, 2.7386358, -4.051545, 6.6098676, -1.0050513, -12.044271, 0.79388875, -2.9755988, -3.168039];
-
-    params_sim.disable_track("turn_right_smooth");
-    params_sim.disable_track("straight");
-    params_sim.disable_all_tracks();
-    params_sim.enable_track("complex");
-    params_sim.simulation_simple_physics = 0.0;
-    // params_sim.tracks_enable_mirror = false;
     params_sim.nn.use_ranking_network = true;
-    // params_sim.simulation_stop_penalty.value = 0.1;
-    params_sim.nn.ranking_hidden_layers = vec![10, 5];
-    params_sim.simulation_steps_quota = 3500;
-    params_sim.eval_add_other_physics = vec![
-        //     PhysicsPatch {
-        //         traction: Some(0.15),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         traction: Some(0.5),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         traction: Some(1.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         friction_coef: Some(1.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         friction_coef: Some(0.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        PhysicsPatch {
-            acceleration_ratio: Some(1.0),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            acceleration_ratio: Some(0.6),
-            ..PhysicsPatch::default()
-        },
-    ];
-    save_runs(
-        vec![evolve_by_cma_es_custom(
-            &params_sim,
-            &params_phys,
-            // &random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.),
-            &input,
-            30,
-            300,
-            Some(0.1),
-            None,
-        )],
-        "ranking_network6",
-    );
-
-    return;
-
-    params_sim.simulation_simple_physics = 0.0;
-    params_sim.start_places_enable = true;
-    params_sim.start_places_disable_all_tracks();
-    params_sim.start_places_enable_track("complex");
-    params_sim.start_places_enable_track("turn_left_90");
-    params_sim.start_places_enable_track("turn_left_180");
-    params_sim.evolution_generation_count = 300;
-    params_sim.evolution_population_size = 30;
-    test_params_sim(&params_sim, &params_phys, "nn2_default_places_hard_physics");
+    test_params_sim(&params_sim, &params_phys, "hard_ranker_physics");
     params_sim = params_sim_copy.clone();
 
-    return;
-
-    params_sim.nn.pass_dirs_diff = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_diff");
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true;
+    test_params_sim(&params_sim, &params_phys, "hard_ranker_no_physics");
     params_sim = params_sim_copy.clone();
 
-    params_sim.nn.pass_dirs_second_layer = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_dirs_second_layer");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.start_places_enable = true;
-    params_sim.start_places_disable_all_tracks();
-    params_sim.start_places_enable_track("complex");
-    params_sim.start_places_enable_track("turn_left_90");
-    params_sim.start_places_enable_track("turn_left_180");
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_start_places");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.nn.pass_current_track = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_pass_current_track");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.nn.pass_current_segment = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_pass_current_segment");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.nn.pass_dirs_diff = true;
-    params_sim.nn.pass_dirs_second_layer = true;
-    params_sim.nn.pass_current_segment = true;
-    test_params_sim_evolve_simple(&params_sim, &params_phys, "nn2_pass_everything");
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true;
+    params_sim.nn.rank_close_to_zero = true;
+    test_params_sim(&params_sim, &params_phys, "hard_ranker_no_physics_to_zero");
     params_sim = params_sim_copy.clone();
 }
 
 pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
-const PRINT: bool = true;
+const PRINT: bool = false;
 const PRINT_EVERY_10: bool = false;
 const PRINT_EVERY_10_ONLY_EVALS: bool = true;
 const PRINT_EVALS: bool = true;
 
-const RUNS_COUNT: usize = 100;
+const RUNS_COUNT: usize = 10;
 const POPULATION_SIZE: usize = 30;
-const GENERATIONS_COUNT: usize = 100;
+const GENERATIONS_COUNT: usize = 300;
 pub const OTHER_PARAMS_SIZE: usize = 1;

@@ -67,12 +67,26 @@ fn activation(x: f32) -> f32 {
     // relu3(x)
     // relu4(x)
     relu5(x)
-    // sqrt_sigmoid(x) * 3.
+    // sqrt_sigmoid(x)
 }
 
 fn activation_vector(output: &mut [f32]) {
     for x in output {
         *x = activation(*x);
+    }
+}
+
+fn softmax(output: &mut [f32]) {
+    let sum = output.iter().map(|x| x.exp()).sum::<f32>();
+    for x in output {
+        *x = x.exp() / sum;
+    }
+}
+
+fn argmax_one_hot(output: &mut [f32]) {
+    let max_index = output.iter().enumerate().max_by(|(_, &x), (_, &y)| x.partial_cmp(&y).unwrap()).unwrap().0;
+    for (i, x) in output.iter_mut().enumerate() {
+        *x = if i == max_index { 1. } else { 0. };
     }
 }
 

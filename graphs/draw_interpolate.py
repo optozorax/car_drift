@@ -66,8 +66,8 @@ def plot_data(filename: str):
     plt.figure(figsize=(10, 6))
     
     # Plot individual trajectories
-    for x, y in plots:
-        plt.plot(x, y, 'b-', alpha=0.1, linewidth=1)
+    # for x, y in plots:
+    #     plt.plot(x, y, 'b-', alpha=0.1, linewidth=1)
     
     # Calculate and plot statistics
     x, mean_y, p25_y, p75_y = calculate_statistics(plots)
@@ -86,4 +86,5 @@ def plot_data(filename: str):
     plt.show()
 
 # Usage
-plot_data('interpolation_data.json')
+plot_data('graphs_to_copy/interpolation_data_ranker.json')
+# plot_data('graphs_to_copy/interpolation_data_actor_predictor.json')

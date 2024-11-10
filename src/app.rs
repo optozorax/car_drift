@@ -142,7 +142,7 @@ impl Default for TemplateApp {
         params_sim.eval_add_min_distance = false;
         params_sim.evolve_simple_physics = false;
         params_sim.mutate_car_enable = false;
-        params_sim.nn.hidden_layers = vec![10];
+        params_sim.nn.hidden_layers = vec![LayerDescription::relu_best(10)];
         params_sim.nn.inv_distance_coef = 30.;
         // params_sim.nn.pass_current_track = true;
         // params_sim.nn.pass_current_segment = true;
@@ -205,15 +205,18 @@ impl Default for TemplateApp {
 
         params_sim.nn.use_ranking_network = true;
         params_sim.nn.rank_without_physics = true; // better than using physics 🥲
-        // params_sim.nn.rank_close_to_zero = true;
-        // params_sim.nn.output_discrete_action = true;
-        params_sim.nn.ranking_hidden_layers = vec![10, 10];
+                                                   // params_sim.nn.rank_close_to_zero = true;
+                                                   // params_sim.nn.output_discrete_action = true;
+        params_sim.nn.ranking_hidden_layers = vec![
+            LayerDescription::relu_best(10),
+            LayerDescription::relu_best(10),
+        ];
         params_sim.simulation_simple_physics = 0.0;
         params_sim.simulation_stop_penalty.value = 50.;
         params_sim.tracks_enable_mirror = false;
-        params_sim.simulation_random_output_second_way = true;
-        params_sim.random_output_probability = 0.001;
-        params_sim.evolution_learning_rate = 0.9;
+        // params_sim.simulation_random_output_second_way = true;
+        // params_sim.random_output_probability = 0.001;
+        // params_sim.evolution_learning_rate = 0.9;
 
         Self {
             rng: StdRng::seed_from_u64(42),

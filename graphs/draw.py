@@ -183,7 +183,7 @@ def draw_values_mean_std(axs, losses, name, color, alpha_mul=1.0, disable_percen
         axs.fill_between(x, losses_10, losses_25, color=color, alpha=0.05 * alpha_mul)
         axs.fill_between(x, losses_75, losses_90, color=color, alpha=0.05 * alpha_mul)
 
-def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disable_percentiles):
+def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disable_percentiles, draw_simple_physics_value=False, draw_autoencoder_value=False):
     offset = 0
     if not skip_individuals:
         offset = 1
@@ -259,26 +259,30 @@ def draw_datas(axs, datas_with_style, skip_individuals, only_complex_track, disa
     axs[offset+3, 1].set(xlabel='Epoch', ylabel='Percent')
     axs[offset+3, 1].legend()
 
-    for data in datas_with_style:
-        draw_values_mean_std(axs[offset+4, 0], process_data(data["data"], step_get_simple_physics), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
-    axs[offset+4, 0].set_title('Simple physics value')
-    axs[offset+4, 0].set(xlabel='Epoch', ylabel='Percent')
-    axs[offset+4, 0].legend()
+    if draw_simple_physics_value:
+        for data in datas_with_style:
+            draw_values_mean_std(axs[offset+4, 0], process_data(data["data"], step_get_simple_physics), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+        axs[offset+4, 0].set_title('Simple physics value')
+        axs[offset+4, 0].set(xlabel='Epoch', ylabel='Percent')
+        axs[offset+4, 0].legend()
 
-    for data in datas_with_style:
-        draw_values_mean_std(axs[offset+4, 1], process_data(data["data"], step_get_autoencoder_loss), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
-    axs[offset+4, 1].set_title('Autoencoder loss average between tracks')
-    axs[offset+4, 1].set(xlabel='Epoch', ylabel='Loss')
-    axs[offset+4, 1].legend()
+    if draw_autoencoder_value:
+        for data in datas_with_style:
+            draw_values_mean_std(axs[offset+4, 1], process_data(data["data"], step_get_autoencoder_loss), data["name"], data.get('color', 'blue'), alpha_mul=data.get('alpha', 1.0), disable_percentiles=disable_percentiles)
+        axs[offset+4, 1].set_title('Autoencoder loss average between tracks')
+        axs[offset+4, 1].set(xlabel='Epoch', ylabel='Loss')
+        axs[offset+4, 1].legend()
 
-def draw_graph(datas, title, filename, skip_individuals=False, only_complex_track=False, disable_percentiles=False):
-    lines = 5
-    if skip_individuals:
-        fig, axs = plt.subplots(lines, 2, figsize=(15, 5 * lines))
-    else:
-        fig, axs = plt.subplots(lines+1, 2, figsize=(15, 5 * (lines+1)))
+def draw_graph(datas, title, filename, skip_individuals=False, only_complex_track=False, disable_percentiles=False, draw_simple_physics_value=False, draw_autoencoder_value=False):
+    lines = 4
+    if draw_simple_physics_value or draw_autoencoder_value:
+        lines += 1
+    if not skip_individuals:
+        lines += 1
+    
+    fig, axs = plt.subplots(lines, 2, figsize=(15, 5 * lines))
     fig.suptitle(title)
-    draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles)
+    draw_datas(axs, datas, skip_individuals, only_complex_track, disable_percentiles, draw_simple_physics_value, draw_autoencoder_value)
     for ax in axs.flat:
         # ax.set_xlim(left=-30, right=530)
         ax.grid(axis='both', color='0.85')
@@ -983,67 +987,136 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     skip_individuals=True,
 # )
 
+draw_graph(
+    [
+        {
+            "data": read_json_file("./hard2_default.json"),
+            "name": "default (regression)",
+            # "alpha": 0.5,
+            "color": colors[0],
+        },
+        {
+            "data": read_json_file("./hard2_discrete.json"),
+            "name": "classification of 9 actions",
+            # "alpha": 0.5,
+            "color": colors[1],
+        },
+        # {
+        #     "data": read_json_file("./hard2_ranker_physics.json"),
+        #     "name": "ranker with physics",
+        #     # "alpha": 0.5,
+        #     "color": colors[2],
+        # },
+        {
+            "data": read_json_file("./hard2_ranker_no_physics.json"),
+            "name": "classification/scoring using EBM",
+            # "alpha": 0.5,
+            "color": colors[2],
+        },
+        # {
+        #     "data": read_json_file("./hard2_ranker_no_physics_to_zero.json"),
+        #     "name": "ranker no physics, to zero",
+        #     # "alpha": 0.5,
+        #     "color": colors[4],
+        # },
+        
+    ],
+    "New approaches to neural network: EBM and classification instead of regression",
+    "_ranker_discrete_hard_physics_twitter.png",
+    skip_individuals=True,
+    only_complex_track=True,
+    disable_percentiles=True,
+)
+
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./activations_relu.json"),
+#             "name": "relu",
+#             "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./activations_relu_10.json"),
+#             "name": "relu10",
+#             "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         {
+#             "data": read_json_file("./activations_relu_leaky.json"),
+#             "name": "relu_leaky",
+#             "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         {
+#             "data": read_json_file("./activations_relu_leaky_10.json"),
+#             "name": "relu_leaky_10",
+#             "alpha": 0.5,
+#             "color": colors[3],
+#         },
+#         {
+#             "data": read_json_file("./activations_relu_leaky_smooth_10.json"),
+#             "name": "relu_leaky_smooth_10",
+#             "alpha": 0.5,
+#             "color": colors[4],
+#         },
+#         {
+#             "data": read_json_file("./activations_sigmoid.json"),
+#             "name": "sigmoid",
+#             "alpha": 0.5,
+#             "color": colors[5],
+#         },
+#         {
+#             "data": read_json_file("./activations_sqrt_sigmoid.json"),
+#             "name": "sqrt_sigmoid",
+#             "alpha": 0.5,
+#             "color": colors[6],
+#         },
+#         {
+#             "data": read_json_file("./activations_softmax.json"),
+#             "name": "softmax",
+#             "alpha": 0.5,
+#             "color": colors[7],
+#         },
+#         {
+#             "data": read_json_file("./activations_argmax_one_hot.json"),
+#             "name": "argmax_one_hot",
+#             "alpha": 0.5,
+#             "color": colors[8],
+#         },
+#     ],
+#     "Activation functions",
+#     "_activations_functions.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
+
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
-data_nn2 = read_json_file("./nn2_default.json")
+# data_nn2 = read_json_file("./nn2_default.json")
+data_default = read_json_file("./hard2_default.json")
 # data_nn_restart = read_json_file("./nn_restart.json")
 for file_name in json_files:
-    if not file_name.startswith("nn2_default_places_hard_physics_2000"):
+    if not file_name.startswith("_hard2_"):
         continue
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)
-    if file_name.startswith("nn_restart"):
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_nn_restart,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    elif file_name.startswith("nn2_"):
-        draw_graph(
-            [
-                {
-                    "data": data,
-                    "name": "current",
-                },
-                {
-                    "data": data_nn2,
-                    "name": "default",
-                    "color": 'gray',
-                    "alpha": 0.5,
-                    'style': 'dashed',
-                }
-            ],
-            f'Graphs for {file_name}',
-            f'{file_name}_graphs.png',
-        )
-    # else:
-        # draw_graph(
-        #     [
-        #         {
-        #             "data": data,
-        #             "name": "current",
-        #         },
-        #         {
-        #             "data": data_default,
-        #             "name": "default",
-        #             "color": 'gray',
-        #             "alpha": 0.5,
-        #             'style': 'dashed',
-        #         }
-        #     ],
-        #     f'Graphs for {file_name}',
-        #     f'{file_name}_graphs.png',
-        # )
+    draw_graph(
+        [
+            {
+                "data": data,
+                "name": "current",
+            },
+            {
+                "data": data_default,
+                "name": "default",
+                "color": 'gray',
+                "alpha": 0.5,
+                'style': 'dashed',
+            }
+        ],
+        f'Graphs for {file_name}',
+        f'{file_name}_graphs.png',
+    )
     print(f"Finish drawing for {file_name}")

@@ -68,7 +68,7 @@ pub struct NnParameters {
     pub pass_prev_output: bool,
     pub pass_simple_physics_value: bool,
     pub pass_next_size: usize,
-    pub hidden_layers: Vec<usize>,
+    pub hidden_layers: Vec<LayerDescription>,
     pub inv_distance: bool,
     pub inv_distance_coef: f32,
     pub inv_distance_pow: f32,
@@ -87,12 +87,12 @@ pub struct NnParameters {
 
     pub use_dirs_autoencoder: bool,
     pub autoencoder_exits: usize,
-    pub autoencoder_hidden_layers: Vec<usize>,
+    pub autoencoder_hidden_layers: Vec<LayerDescription>,
 
     pub pass_time_mods: Vec<f32>,
 
     pub use_ranking_network: bool,
-    pub ranking_hidden_layers: Vec<usize>,
+    pub ranking_hidden_layers: Vec<LayerDescription>,
     pub rank_without_physics: bool,
     pub rank_close_to_zero: bool,
 
@@ -182,6 +182,7 @@ pub struct SimulationParameters {
     pub evolution_learning_rate: f64,
     pub evolution_distance_to_solution: f64,
     pub evolution_simple_add_mid_start: bool,
+    pub evolution_start_input_range: f32,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -242,7 +243,7 @@ impl NnParameters {
                 &mut self.hidden_layers,
                 ui,
                 "layers".into(),
-                |elem, ui, _| egui_usize(ui, elem),
+                |elem, ui, _| egui_usize(ui, &mut elem.size),
                 true,
             );
         });
@@ -307,28 +308,34 @@ impl NnParameters {
         }
     }
 
-    pub fn get_nn_sizes(&self) -> Vec<usize> {
+    pub fn get_nn_sizes(&self) -> Vec<LayerDescription> {
         if self.use_ranking_network {
-            std::iter::once(self.get_total_input_neurons())
+            std::iter::once(LayerDescription::none(self.get_total_input_neurons()))
                 .chain(self.ranking_hidden_layers.iter().copied())
-                .chain(std::iter::once(self.get_total_output_neurons()))
+                .chain(std::iter::once(LayerDescription::none(
+                    self.get_total_output_neurons(),
+                )))
                 .collect()
         } else {
-            std::iter::once(self.get_total_input_neurons())
+            std::iter::once(LayerDescription::none(self.get_total_input_neurons()))
                 .chain(self.hidden_layers.iter().copied())
-                .chain(std::iter::once(self.get_total_output_neurons()))
+                .chain(std::iter::once(LayerDescription::none(
+                    self.get_total_output_neurons(),
+                )))
                 .collect()
         }
     }
 
-    pub fn get_nn_autoencoder_input_sizes(&self) -> Vec<usize> {
-        std::iter::once(self.dirs_size)
+    pub fn get_nn_autoencoder_input_sizes(&self) -> Vec<LayerDescription> {
+        std::iter::once(LayerDescription::none(self.dirs_size))
             .chain(self.autoencoder_hidden_layers.iter().copied())
-            .chain(std::iter::once(self.autoencoder_exits))
+            .chain(std::iter::once(LayerDescription::none(
+                self.autoencoder_exits,
+            )))
             .collect()
     }
 
-    pub fn get_nn_autoencoder_output_sizes(&self) -> Vec<usize> {
+    pub fn get_nn_autoencoder_output_sizes(&self) -> Vec<LayerDescription> {
         let mut result = self.get_nn_autoencoder_input_sizes();
         result.reverse();
         result
@@ -949,6 +956,296 @@ pub fn track_straight_45() -> (String, Vec<PointsStorage>) {
     )
 }
 
+pub fn track_loop() -> (String, Vec<PointsStorage>) {
+    (
+        "loop".to_owned(),
+        vec![
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(86.06, 43.66),
+                    pos2(1392.63, 43.17),
+                    pos2(1793.14, 4.34),
+                    pos2(2145.64, -91.17),
+                    pos2(2416.52, -250.92),
+                    pos2(2413.05, -907.29),
+                    pos2(2459.93, -1110.46),
+                    pos2(2598.85, -1221.59),
+                    pos2(2732.55, -1251.11),
+                    pos2(2890.57, -1249.37),
+                    pos2(3032.96, -1172.97),
+                    pos2(3128.46, -1041.00),
+                    pos2(3168.40, -926.39),
+                    pos2(3178.82, -252.66),
+                    pos2(3177.08, 275.22),
+                    pos2(3135.41, 540.90),
+                    pos2(3018.72, 718.56),
+                    pos2(2577.61, 706.56),
+                    pos2(2618.70, 495.43),
+                    pos2(2577.65, 706.61),
+                    pos2(2262.06, 750.83),
+                    pos2(2137.43, 947.83),
+                    pos2(2022.85, 1120.70),
+                    pos2(1876.11, 1193.06),
+                    pos2(1659.02, 1174.97),
+                    pos2(1421.82, 1132.76),
+                    pos2(1287.14, 1066.42),
+                    pos2(1102.21, 971.95),
+                    pos2(954.83, 726.59),
+                    pos2(167.53, 695.21),
+                    pos2(-492.26, 847.12),
+                    pos2(-614.34, 776.66),
+                    pos2(-663.20, 688.23),
+                    pos2(-693.45, 564.90),
+                    pos2(-688.80, 404.34),
+                    pos2(-646.91, 287.99),
+                    pos2(-567.80, 153.02),
+                    pos2(-421.20, 80.89),
+                    pos2(-232.71, 39.00),
+                    pos2(86.09, 43.65),
+                ],
+            },
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(-225.21, 440.22),
+                    pos2(91.11, 415.14),
+                    pos2(1383.63, 435.24),
+                    pos2(1866.07, 348.80),
+                    pos2(2282.17, 248.29),
+                    pos2(2613.84, 79.44),
+                    pos2(2794.75, -107.50),
+                    pos2(2784.70, -913.57),
+                ],
+            },
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(2007.19, 328.93),
+                    pos2(1677.63, 857.40),
+                    pos2(1075.64, 447.04),
+                ],
+            },
+            PointsStorage {
+                is_reward: true,
+                points: vec![
+                    pos2(862.96, 227.59),
+                    pos2(1927.17, 162.67),
+                    pos2(2390.26, 5.65),
+                    pos2(2618.69, -284.78),
+                    pos2(2596.21, -688.33),
+                    pos2(2595.15, -923.22),
+                    pos2(2782.57, -1114.72),
+                    pos2(2976.93, -966.99),
+                    pos2(2991.32, -716.79),
+                    pos2(2996.44, 59.44),
+                    pos2(2645.06, 282.04),
+                    pos2(1959.63, 814.33),
+                    pos2(1723.76, 1043.03),
+                    pos2(1225.86, 732.50),
+                    pos2(962.03, 592.78),
+                    pos2(269.51, 562.66),
+                    pos2(-54.91, 590.48),
+                    pos2(-362.20, 610.78),
+                    pos2(-524.86, 475.04),
+                    pos2(-390.01, 273.18),
+                    pos2(-70.39, 226.72),
+                ],
+            },
+        ],
+    )
+}
+
+pub fn track_straight_turn() -> (String, Vec<PointsStorage>) {
+    (
+        "straight_turn".to_owned(),
+        vec![
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(-14.28, 17.83),
+                    pos2(6230.98, 178.47),
+                    pos2(6226.23, 514.13),
+                    pos2(8279.91, 511.92),
+                    pos2(8284.18, 1346.21),
+                    pos2(7831.66, 1351.39),
+                    pos2(7838.53, 917.79),
+                    pos2(5626.36, 905.14),
+                    pos2(5634.77, 516.46),
+                    pos2(-24.13, 409.14),
+                    pos2(-14.23, 17.90),
+                ],
+            },
+            PointsStorage {
+                is_reward: true,
+                points: vec![
+                    pos2(255.56, 251.16),
+                    pos2(5064.73, 336.38),
+                    pos2(5508.00, 347.74),
+                    pos2(5929.05, 519.46),
+                    pos2(6289.30, 727.45),
+                    pos2(6700.19, 736.97),
+                    pos2(7687.94, 738.33),
+                ],
+            },
+        ],
+    )
+}
+
+pub fn track_bubble_straight() -> (String, Vec<PointsStorage>) {
+    (
+        "bubble_straight".to_owned(),
+        vec![
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(-14.23, 17.90),
+                    pos2(2599.76, 26.70),
+                    pos2(2966.35, -1636.05),
+                    pos2(3561.60, -2191.07),
+                    pos2(4591.47, -1977.75),
+                    pos2(5247.65, -1495.88),
+                    pos2(5542.16, -616.31),
+                    pos2(5592.24, 824.42),
+                    pos2(6848.82, 78.22),
+                    pos2(6597.50, -422.08),
+                    pos2(6983.78, -647.80),
+                    pos2(7460.51, 160.08),
+                    pos2(5576.49, 1328.17),
+                    pos2(5148.15, 1946.77),
+                    pos2(4013.86, 2054.23),
+                    pos2(3132.76, 1927.19),
+                    pos2(2680.58, 1198.54),
+                    pos2(2601.85, 440.19),
+                    pos2(-22.07, 424.51),
+                    pos2(-14.23, 17.90),
+                ],
+            },
+            PointsStorage {
+                is_reward: true,
+                points: vec![
+                    pos2(255.56, 251.16),
+                    pos2(2325.81, 275.87),
+                    pos2(3057.63, 318.99),
+                    pos2(3704.72, 628.55),
+                    pos2(4753.57, 1008.18),
+                    pos2(5653.04, 1040.02),
+                    pos2(6337.59, 638.05),
+                    pos2(7002.24, 236.07),
+                ],
+            },
+        ],
+    )
+}
+
+pub fn track_bubble_180() -> (String, Vec<PointsStorage>) {
+    (
+        "bubble_180".to_owned(),
+        vec![
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(-14.23, 17.90),
+                    pos2(2599.76, 26.70),
+                    pos2(2966.35, -1636.05),
+                    pos2(3561.60, -2191.07),
+                    pos2(4591.47, -1977.75),
+                    pos2(5247.65, -1495.88),
+                    pos2(5542.16, -616.31),
+                    pos2(5592.24, 824.42),
+                    pos2(5576.49, 1328.17),
+                    pos2(5148.15, 1946.77),
+                    pos2(4013.86, 2054.23),
+                    pos2(3132.76, 1927.19),
+                    pos2(1337.52, 2671.57),
+                    pos2(867.80, 1516.32),
+                    pos2(1299.44, 1330.97),
+                    pos2(1598.02, 2027.67),
+                    pos2(2844.35, 1480.42),
+                    pos2(2601.85, 440.19),
+                    pos2(-22.07, 424.51),
+                    pos2(-14.23, 17.90),
+                ],
+            },
+            PointsStorage {
+                is_reward: true,
+                points: vec![
+                    pos2(255.56, 251.16),
+                    pos2(2325.81, 275.87),
+                    pos2(2981.46, 318.99),
+                    pos2(3406.82, 462.62),
+                    pos2(3572.69, 897.69),
+                    pos2(3406.82, 1305.58),
+                    pos2(2891.40, 1770.22),
+                    pos2(1692.98, 2278.02),
+                ],
+            },
+        ],
+    )
+}
+
+pub fn track_separation() -> (String, Vec<PointsStorage>) {
+    (
+        "separation".to_owned(),
+        vec![
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(-14.23, 17.90),
+                    pos2(1526.19, 7.75),
+                    pos2(2181.20, 126.85),
+                    pos2(2935.45, 103.39),
+                    pos2(3657.23, 532.85),
+                    pos2(3918.87, 926.21),
+                    pos2(3852.11, 1494.61),
+                    pos2(3956.76, 2126.16),
+                    pos2(4021.72, 2763.13),
+                    pos2(3954.50, 3156.18),
+                    pos2(3178.59, 3268.06),
+                    pos2(3140.70, 2840.41),
+                    pos2(3595.41, 2802.52),
+                    pos2(3529.11, 2160.45),
+                    pos2(3489.42, 1819.41),
+                    pos2(3166.42, 1536.11),
+                    pos2(2413.97, 1007.41),
+                    pos2(2085.56, 666.37),
+                    pos2(1549.65, 448.04),
+                    pos2(-28.29, 422.55),
+                    pos2(-14.23, 17.90),
+                ],
+            },
+            PointsStorage {
+                is_reward: true,
+                points: vec![
+                    pos2(255.56, 251.16),
+                    pos2(1368.96, 241.33),
+                    pos2(1919.10, 310.59),
+                    pos2(2586.74, 548.78),
+                    pos2(3025.21, 786.96),
+                    pos2(3331.97, 1048.60),
+                    pos2(3514.22, 1357.16),
+                    pos2(3691.05, 1777.60),
+                    pos2(3752.40, 2160.14),
+                    pos2(3813.75, 2775.45),
+                ],
+            },
+            PointsStorage {
+                is_reward: false,
+                points: vec![
+                    pos2(2332.59, 437.51),
+                    pos2(2810.95, 439.02),
+                    pos2(3249.43, 666.38),
+                    pos2(3485.81, 955.09),
+                    pos2(3462.35, 1252.82),
+                    pos2(3078.00, 1122.90),
+                    pos2(2747.79, 900.95),
+                    pos2(2332.77, 439.02),
+                ],
+            },
+        ],
+    )
+}
+
 pub fn get_all_tracks() -> Vec<(String, Vec<PointsStorage>)> {
     vec![
         track_straight_line(),
@@ -959,6 +1256,11 @@ pub fn get_all_tracks() -> Vec<(String, Vec<PointsStorage>)> {
         track_turn_left_180(),
         // track_turn_around(),
         track_complex(),
+        track_loop(),
+        track_straight_turn(),
+        track_bubble_straight(),
+        track_bubble_180(),
+        track_separation(),
     ]
 }
 
@@ -1481,10 +1783,12 @@ impl NnProcessor {
 
                     (action, values[0])
                 })
-                .max_by(|(_, value1), (_, value2)| if self.params.rank_close_to_zero {
-                    value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
-                } else {
-                    value1.partial_cmp(value2).unwrap()
+                .max_by(|(_, value1), (_, value2)| {
+                    if self.params.rank_close_to_zero {
+                        value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
+                    } else {
+                        value1.partial_cmp(value2).unwrap()
+                    }
                 })
                 .unwrap()
                 .0
@@ -2803,7 +3107,7 @@ impl Default for NnParameters {
             pass_prev_output: false,
             pass_simple_physics_value: false,
             pass_next_size: 0,
-            hidden_layers: vec![6],
+            hidden_layers: vec![LayerDescription::relu_best(6)],
             inv_distance: true,
             inv_distance_coef: 20.,
             inv_distance_pow: 0.5,
@@ -2815,7 +3119,7 @@ impl Default for NnParameters {
             pass_dirs_second_layer: false,
 
             use_dirs_autoencoder: false,
-            autoencoder_hidden_layers: vec![6],
+            autoencoder_hidden_layers: vec![LayerDescription::relu_best(6)],
             autoencoder_exits: 5,
 
             pass_current_track: false,
@@ -2827,7 +3131,7 @@ impl Default for NnParameters {
             pass_time_mods: vec![],
 
             use_ranking_network: false,
-            ranking_hidden_layers: vec![6],
+            ranking_hidden_layers: vec![LayerDescription::relu_best(6)],
             rank_without_physics: false,
             rank_close_to_zero: false,
 
@@ -2845,17 +3149,10 @@ impl Default for SimulationParameters {
                 .clone()
                 .into_iter()
                 .chain(
-                    vec![
-                        "straight",
-                        "straight_45",
-                        "turn_right_smooth",
-                        "smooth_left_and_right",
-                        "turn_left_90",
-                        "turn_left_180",
-                        "complex",
-                    ]
-                    .into_iter()
-                    .map(|x| (x.to_owned(), true)),
+                    get_all_tracks()
+                        .into_iter()
+                        .map(|x| x.0)
+                        .map(|x| (x.to_owned(), true)),
                 )
                 .collect(),
             tracks_enable_mirror: true,
@@ -2864,18 +3161,12 @@ impl Default for SimulationParameters {
             start_places_for_tracks: all_tracks
                 .into_iter()
                 .chain(
-                    vec![
-                        "straight",
-                        "straight_45",
-                        "turn_right_smooth",
-                        "smooth_left_and_right",
-                        "turn_left_90",
-                        "turn_left_180",
-                        "complex",
-                    ]
-                    .into_iter()
-                    .flat_map(|x| vec![x.to_owned(), x.to_owned() + "_mirror"])
-                    .map(|x| (x.to_owned(), false)),
+                    get_all_tracks()
+                        .into_iter()
+                        .map(|x| x.0)
+                        .into_iter()
+                        .flat_map(|x| vec![x.to_owned(), x.to_owned() + "_mirror"])
+                        .map(|x| (x.to_owned(), false)),
                 )
                 .collect(),
 
@@ -2907,6 +3198,7 @@ impl Default for SimulationParameters {
             evolution_learning_rate: 1.0,
             evolution_distance_to_solution: 10.,
             evolution_simple_add_mid_start: false,
+            evolution_start_input_range: 10.,
 
             eval_skip_passed_tracks: false,
             eval_add_min_distance: false,
@@ -2929,7 +3221,6 @@ impl SimulationParameters {
     pub fn true_metric(other: &SimulationParameters) -> Self {
         let mut result = Self::default();
         result.enable_all_tracks();
-        result.disable_track("straight_45"); // todo: удалить это и снова проверить
         result.rewards_second_way = true;
         result.mutate_car_enable = false;
         result.simulation_stop_penalty.value = 100.;
@@ -2938,8 +3229,6 @@ impl SimulationParameters {
         result.evolve_simple_physics = other.evolve_simple_physics;
 
         result.nn = other.nn.clone();
-
-        // result.evolve_simple_physics = true;
 
         result
     }
@@ -3118,7 +3407,10 @@ fn random_input_by_len(len: usize, limit: f32) -> Vec<f32> {
 }
 
 fn random_input(params_sim: &SimulationParameters) -> Vec<f32> {
-    random_input_by_len(params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE, 1.)
+    random_input_by_len(
+        params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE,
+        params_sim.evolution_start_input_range,
+    )
 }
 
 fn test_params_sim_fn<
@@ -3651,9 +3943,12 @@ fn evaluate_noise(params_sim: &SimulationParameters, params_phys: &PhysicsParame
     let params = vec![];
     params_sim.nn.use_ranking_network = true;
     params_sim.nn.rank_without_physics = true; // better than using physics 🥲
-    // params_sim.nn.output_discrete_action = true;
+                                               // params_sim.nn.output_discrete_action = true;
 
-    params_sim.nn.ranking_hidden_layers = vec![10, 10];
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::relu_best(10),
+        LayerDescription::relu_best(10),
+    ];
     params_sim.simulation_simple_physics = 0.0;
     params_sim.simulation_stop_penalty.value = 50.;
     params_sim.tracks_enable_mirror = false;
@@ -3661,22 +3956,28 @@ fn evaluate_noise(params_sim: &SimulationParameters, params_phys: &PhysicsParame
 
     let runs_amount = 300;
     let t_amount = 50;
-    let data = (0..runs_amount).into_par_iter().map(|i| {
-        let mut params_sim = params_sim.clone();
-        let now = Instant::now();
-        let mut data_row: Vec<(f32, f32)> = vec![];
-        for t in (0..=t_amount).map(|x| x as f32 / t_amount as f32 / 2.) {
-            params_sim.random_output_probability = t;
-            let evals = eval_nn(&params, &params_phys, &params_sim);
-            let cost = sum_evals(&evals, &params_sim, true);
+    let data = (0..runs_amount)
+        .into_par_iter()
+        .map(|i| {
+            let mut params_sim = params_sim.clone();
+            let now = Instant::now();
+            let mut data_row: Vec<(f32, f32)> = vec![];
+            for t in (0..=t_amount).map(|x| x as f32 / t_amount as f32 / 2.) {
+                params_sim.random_output_probability = t;
+                let evals = eval_nn(&params, &params_phys, &params_sim);
+                let cost = sum_evals(&evals, &params_sim, true);
 
-            data_row.push((t, cost));
-        }
-        println!("{i}, time: {:?}", now.elapsed());
-        data_row
-    }).collect::<Vec<_>>();
+                data_row.push((t, cost));
+            }
+            println!("{i}, time: {:?}", now.elapsed());
+            data_row
+        })
+        .collect::<Vec<_>>();
     // save_json_to_file(&data, "graphs/graphs_to_copy/interpolation_data_actor_predictor.json");
-    save_json_to_file(&data, "graphs/graphs_to_copy/interpolation_data_ranker.json");
+    save_json_to_file(
+        &data,
+        "graphs/graphs_to_copy/interpolation_data_ranker.json",
+    );
 }
 
 fn eval_nn_from_python(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
@@ -3686,7 +3987,7 @@ fn eval_nn_from_python(params_sim: &SimulationParameters, params_phys: &PhysicsP
     params.push(0.);
     params_sim.nn.pass_dirs_diff = true;
     params_sim.nn.output_discrete_action = true;
-    params_sim.nn.hidden_layers = vec![16];
+    params_sim.nn.hidden_layers = vec![LayerDescription::relu_best(16)];
     params_sim.simulation_simple_physics = 0.0;
     params_sim.simulation_stop_penalty.value = 50.;
     let evals = eval_nn(&params, &params_phys, &params_sim);
@@ -3705,6 +4006,11 @@ pub fn evolution() {
 
     params_sim.enable_all_tracks();
     params_sim.disable_track("straight_45");
+    params_sim.disable_track("loop");
+    params_sim.disable_track("straight_turn");
+    params_sim.disable_track("bubble_straight");
+    params_sim.disable_track("bubble_180");
+    params_sim.disable_track("separation");
     params_sim.simulation_enable_random_nn_output = false;
     params_sim.eval_penalty.value = 200.;
     params_sim.rewards_add_each_acquire = true;
@@ -3721,42 +4027,140 @@ pub fn evolution() {
     params_sim.simulation_simple_physics = 1.0;
     params_sim.evolution_generation_count = 150;
     params_sim.nn.view_angle_ratio = 3. / 6.;
-    params_sim.nn.hidden_layers = vec![10];
+    params_sim.nn.hidden_layers = vec![LayerDescription::relu_best(10)];
     params_sim.nn.inv_distance_coef = 30.;
 
     // new settings
-    params_sim.nn.ranking_hidden_layers = vec![10];
+    params_sim.simulation_simple_physics = 0.0;
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::relu_best(10)];
     params_sim.simulation_stop_penalty.value = 50.;
     params_sim.tracks_enable_mirror = false;
     params_sim.nn.pass_dirs_diff = true;
     params_sim.evolution_population_size = 30;
-    params_sim.evolution_generation_count = 30;
+    params_sim.evolution_generation_count = 300;
     params_sim.evolution_distance_to_solution = 1.;
+    params_sim.evolution_start_input_range = 1.;
 
     let mut params_sim_copy = params_sim.clone();
-    
-    test_params_sim(&params_sim, &params_phys, "hard_default");
+
+    test_params_sim(&params_sim, &params_phys, "hard2_default");
     params_sim = params_sim_copy.clone();
 
-    return;
+    params_sim.tracks_enable_mirror = true;
+    test_params_sim(&params_sim, &params_phys, "hard2_with_mirror");
+    params_sim = params_sim_copy.clone();
 
     params_sim.nn.output_discrete_action = true;
-    test_params_sim(&params_sim, &params_phys, "hard_discrete");
-    params_sim = params_sim_copy.clone();
-
-    params_sim.nn.use_ranking_network = true;
-    test_params_sim(&params_sim, &params_phys, "hard_ranker_physics");
+    test_params_sim(&params_sim, &params_phys, "hard2_discrete");
     params_sim = params_sim_copy.clone();
 
     params_sim.nn.use_ranking_network = true;
     params_sim.nn.rank_without_physics = true;
-    test_params_sim(&params_sim, &params_phys, "hard_ranker_no_physics");
+    test_params_sim(&params_sim, &params_phys, "hard2_ranker_no_physics");
     params_sim = params_sim_copy.clone();
 
     params_sim.nn.use_ranking_network = true;
     params_sim.nn.rank_without_physics = true;
     params_sim.nn.rank_close_to_zero = true;
-    test_params_sim(&params_sim, &params_phys, "hard_ranker_no_physics_to_zero");
+    test_params_sim(&params_sim, &params_phys, "hard2_ranker_no_physics_to_zero");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.tracks_enable_mirror = true;
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true;
+    params_sim.nn.rank_close_to_zero = true;
+    test_params_sim(
+        &params_sim,
+        &params_phys,
+        "hard2_ranker_no_physics_to_zero_mirror",
+    );
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.use_ranking_network = true;
+    test_params_sim(&params_sim, &params_phys, "hard2_ranker_physics");
+    params_sim = params_sim_copy.clone();
+
+    return;
+
+    params_sim.evolution_distance_to_solution = 10.;
+    test_params_sim(&params_sim, &params_phys, "hard2_default_cmaes_1_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.evolution_distance_to_solution = 10.;
+    params_sim.evolution_start_input_range = 10.;
+    test_params_sim(&params_sim, &params_phys, "hard2_default_cmaes_10_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.evolution_start_input_range = 10.;
+    test_params_sim(&params_sim, &params_phys, "hard2_default_cmaes_10_1");
+    params_sim = params_sim_copy.clone();
+
+    return;
+
+    test_params_sim(&params_sim, &params_phys, "hard2_default");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.tracks_enable_mirror = true;
+    test_params_sim(&params_sim, &params_phys, "hard2_with_mirror");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.simulation_stop_penalty.value = 20.;
+    test_params_sim(&params_sim, &params_phys, "hard2_stop_penalty_20");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_dirs_diff = false;
+    test_params_sim(&params_sim, &params_phys, "hard2_no_dirs_diff");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.pass_dirs_diff = false;
+    params_sim.simulation_stop_penalty.value = 20.;
+    params_sim.tracks_enable_mirror = true;
+    test_params_sim(&params_sim, &params_phys, "hard2_all_old_settings");
+    params_sim = params_sim_copy.clone();
+
+    return;
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::Relu)];
+    test_params_sim(&params_sim, &params_phys, "activations_relu");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::Relu10)];
+    test_params_sim(&params_sim, &params_phys, "activations_relu_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::ReluLeaky)];
+    test_params_sim(&params_sim, &params_phys, "activations_relu_leaky");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::ReluLeaky10)];
+    test_params_sim(&params_sim, &params_phys, "activations_relu_leaky_10");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(
+        10,
+        ActivationFunction::ReluLeakySmooth10,
+    )];
+    test_params_sim(
+        &params_sim,
+        &params_phys,
+        "activations_relu_leaky_smooth_10",
+    );
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::Sigmoid)];
+    test_params_sim(&params_sim, &params_phys, "activations_sigmoid");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::SqrtSigmoid)];
+    test_params_sim(&params_sim, &params_phys, "activations_sqrt_sigmoid");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::Softmax)];
+    test_params_sim(&params_sim, &params_phys, "activations_softmax");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::ArgmaxOneHot)];
+    test_params_sim(&params_sim, &params_phys, "activations_argmax_one_hot");
     params_sim = params_sim_copy.clone();
 }
 
@@ -3768,7 +4172,7 @@ const PRINT_EVERY_10: bool = false;
 const PRINT_EVERY_10_ONLY_EVALS: bool = true;
 const PRINT_EVALS: bool = true;
 
-const RUNS_COUNT: usize = 10;
+const RUNS_COUNT: usize = 60;
 const POPULATION_SIZE: usize = 30;
 const GENERATIONS_COUNT: usize = 300;
 pub const OTHER_PARAMS_SIZE: usize = 1;

@@ -28,19 +28,19 @@ pub fn sqrt_sigmoid(x: f32) -> f32 {
     x / (1. + x * x).sqrt()
 }
 
-pub fn relu1(x: f32) -> f32 {
+pub fn relu10(x: f32) -> f32 {
     x.clamp(0., 10.)
 }
 
-pub fn relu2(x: f32) -> f32 {
+pub fn relu_leaky_10(x: f32) -> f32 {
     if x > 0. { x } else { x * 0.1 }.clamp(-1., 10.)
 }
 
-pub fn relu3(x: f32) -> f32 {
+pub fn relu(x: f32) -> f32 {
     x.max(0.)
 }
 
-pub fn relu4(x: f32) -> f32 {
+pub fn relu_leaky(x: f32) -> f32 {
     if x > 0. {
         x
     } else {
@@ -48,7 +48,7 @@ pub fn relu4(x: f32) -> f32 {
     }
 }
 
-pub fn relu5(x: f32) -> f32 {
+pub fn relu_leaky_smooth_10(x: f32) -> f32 {
     if x > 10. {
         11. - 1. / (1. + x - 10.)
     } else if x < -10. {
@@ -60,22 +60,6 @@ pub fn relu5(x: f32) -> f32 {
     }
 }
 
-fn activation(x: f32) -> f32 {
-    // sigmoid(x)
-    // relu1(x)
-    // relu2(x)
-    // relu3(x)
-    // relu4(x)
-    relu5(x)
-    // sqrt_sigmoid(x)
-}
-
-fn activation_vector(output: &mut [f32]) {
-    for x in output {
-        *x = activation(*x);
-    }
-}
-
 fn softmax(output: &mut [f32]) {
     let sum = output.iter().map(|x| x.exp()).sum::<f32>();
     for x in output {
@@ -84,7 +68,12 @@ fn softmax(output: &mut [f32]) {
 }
 
 fn argmax_one_hot(output: &mut [f32]) {
-    let max_index = output.iter().enumerate().max_by(|(_, &x), (_, &y)| x.partial_cmp(&y).unwrap()).unwrap().0;
+    let max_index = output
+        .iter()
+        .enumerate()
+        .max_by(|(_, &x), (_, &y)| x.partial_cmp(&y).unwrap())
+        .unwrap()
+        .0;
     for (i, x) in output.iter_mut().enumerate() {
         *x = if i == max_index { 1. } else { 0. };
     }
@@ -105,9 +94,108 @@ fn sum_vectors(input: &[f32], vector: &[f32], output: &mut [f32]) {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Copy, PartialEq, Default)]
+pub enum ActivationFunction {
+    #[default]
+    None,
+    Relu,
+    Relu10,
+    ReluLeaky,
+    ReluLeaky10,
+    ReluLeakySmooth10,
+    Sigmoid,
+    SqrtSigmoid,
+    Softmax,
+    ArgmaxOneHot,
+}
+
+impl ActivationFunction {
+    fn apply_single(&self, x: f32) -> f32 {
+        match *self {
+            ActivationFunction::None => x,
+            ActivationFunction::Relu => relu(x),
+            ActivationFunction::Relu10 => relu10(x),
+            ActivationFunction::ReluLeaky => relu_leaky(x),
+            ActivationFunction::ReluLeaky10 => relu_leaky_10(x),
+            ActivationFunction::ReluLeakySmooth10 => relu_leaky_smooth_10(x),
+            ActivationFunction::Sigmoid => sigmoid(x),
+            ActivationFunction::SqrtSigmoid => sqrt_sigmoid(x),
+            ActivationFunction::Softmax => panic!(),
+            ActivationFunction::ArgmaxOneHot => panic!(),
+        }
+    }
+
+    fn apply_vector(&self, output: &mut [f32]) {
+        match self {
+            ActivationFunction::None => {}
+            ActivationFunction::Relu => {
+                for x in output {
+                    *x = relu(*x);
+                }
+            }
+            ActivationFunction::Relu10 => {
+                for x in output {
+                    *x = relu10(*x);
+                }
+            }
+            ActivationFunction::ReluLeaky => {
+                for x in output {
+                    *x = relu_leaky(*x);
+                }
+            }
+            ActivationFunction::ReluLeaky10 => {
+                for x in output {
+                    *x = relu_leaky_10(*x);
+                }
+            }
+            ActivationFunction::ReluLeakySmooth10 => {
+                for x in output {
+                    *x = relu_leaky_smooth_10(*x);
+                }
+            }
+            ActivationFunction::Sigmoid => {
+                for x in output {
+                    *x = sigmoid(*x);
+                }
+            }
+            ActivationFunction::SqrtSigmoid => {
+                for x in output {
+                    *x = sqrt_sigmoid(*x);
+                }
+            }
+            ActivationFunction::Softmax => softmax(output),
+            ActivationFunction::ArgmaxOneHot => argmax_one_hot(output),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq, Copy, Default)]
+pub struct LayerDescription {
+    pub size: usize,
+    pub func: ActivationFunction,
+}
+
+impl LayerDescription {
+    pub fn new(size: usize, func: ActivationFunction) -> Self {
+        Self { size, func }
+    }
+
+    pub fn none(size: usize) -> Self {
+        Self::new(size, ActivationFunction::None)
+    }
+
+    pub fn relu_best(size: usize) -> Self {
+        Self::new(size, ActivationFunction::ReluLeakySmooth10)
+    }
+
+    pub fn relu(size: usize) -> Self {
+        Self::new(size, ActivationFunction::Relu)
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct NeuralNetwork {
-    sizes: Vec<usize>,
+    sizes: Vec<LayerDescription>,
     values: Vec<f32>,
 
     reserved1: Vec<f32>,
@@ -118,7 +206,7 @@ pub struct NeuralNetwork {
 }
 
 impl NeuralNetwork {
-    pub fn new_zeros(sizes: Vec<usize>) -> Self {
+    pub fn new_zeros(sizes: Vec<LayerDescription>) -> Self {
         let values_size = Self::calc_nn_len(&sizes);
         let mut result = Self {
             sizes,
@@ -132,7 +220,7 @@ impl NeuralNetwork {
         result
     }
 
-    pub fn new_params(sizes: Vec<usize>, params: &[f32]) -> Self {
+    pub fn new_params(sizes: Vec<LayerDescription>, params: &[f32]) -> Self {
         let values_size = Self::calc_nn_len(&sizes);
         assert_eq!(params.len(), values_size);
         let mut result = Self {
@@ -147,11 +235,13 @@ impl NeuralNetwork {
         result
     }
 
-    pub fn calc_nn_len(sizes: &[usize]) -> usize {
-        pairs(sizes.iter()).map(|(a, b)| (a + 1) * b).sum()
+    pub fn calc_nn_len(sizes: &[LayerDescription]) -> usize {
+        pairs(sizes.iter().map(|x| x.size))
+            .map(|(a, b)| (a + 1) * b)
+            .sum()
     }
 
-    pub fn get_sizes(&self) -> &[usize] {
+    pub fn get_sizes(&self) -> &[LayerDescription] {
         &self.sizes
     }
 
@@ -163,7 +253,7 @@ impl NeuralNetwork {
         &mut self.values
     }
 
-    pub fn generate_random(sizes: Vec<usize>, rng: &mut impl Rng) -> Self {
+    pub fn generate_random(sizes: Vec<LayerDescription>, rng: &mut impl Rng) -> Self {
         let mut result = Self::new_zeros(sizes);
         result
             .values
@@ -173,7 +263,7 @@ impl NeuralNetwork {
     }
 
     pub fn resize_reserved(&mut self) {
-        let reserved_size = pairs(self.sizes.iter())
+        let reserved_size = pairs(self.sizes.iter().map(|x| x.size))
             .map(|(a, b)| (a + b).max(a + a).max(b + b))
             .max()
             .unwrap_or(0);
@@ -191,37 +281,38 @@ impl NeuralNetwork {
 
         let mut offset = 0;
         for (prev, now) in pairs(self.sizes.iter()) {
-            let (prev_slice, now_slice) = self.reserved1[..prev + now].split_at_mut(*prev);
+            let (prev_slice, now_slice) =
+                self.reserved1[..prev.size + now.size].split_at_mut(prev.size);
             mul_matrix(
                 prev_slice,
-                &self.values[offset..(offset + prev * now)],
+                &self.values[offset..(offset + prev.size * now.size)],
                 now_slice,
-                *prev,
-                *now,
+                prev.size,
+                now.size,
             );
-            offset += prev * now;
+            offset += prev.size * now.size;
             sum_vectors(
                 now_slice,
-                &self.values[offset..(offset + now)],
-                &mut self.reserved2[..*now],
+                &self.values[offset..(offset + now.size)],
+                &mut self.reserved2[..now.size],
             );
 
-            for value in &self.reserved2[..*now] {
+            for value in &self.reserved2[..now.size] {
                 if value.abs() > 10. {
                     regularization += value.abs();
                     values_count += 1;
                 }
             }
-            activation_vector(&mut self.reserved2[..*now]);
-            strip_bad_values(&mut self.reserved2[..*now]);
-            offset += now;
+            now.func.apply_vector(&mut self.reserved2[..now.size]);
+            strip_bad_values(&mut self.reserved2[..now.size]);
+            offset += now.size;
             std::mem::swap(&mut self.reserved1, &mut self.reserved2);
         }
 
         self.regularization += regularization / values_count as f32;
         self.calc_count += 1;
 
-        &self.reserved1[..*self.sizes.last().unwrap()]
+        &self.reserved1[..self.sizes.last().unwrap().size]
     }
 
     pub fn mutate_float_value(&mut self, rng: &mut impl Rng) {
@@ -243,6 +334,7 @@ pub struct Layer {
     pub output_size: usize,
     pub matrix: Vec<Vec<f32>>, // outer vec has size output_size, inner vec has size input_size
     pub bias: Vec<f32>,
+    pub func: ActivationFunction,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -255,7 +347,7 @@ impl NeuralNetworkUnoptimized {
         self.layers.iter().fold(input.to_vec(), |input, layer| {
             let mut output = vec![0.0; layer.output_size];
             for (i, output_neuron) in output.iter_mut().enumerate() {
-                *output_neuron = activation(
+                *output_neuron = layer.func.apply_single(
                     layer.matrix[i]
                         .iter()
                         .zip(input.iter())
@@ -274,19 +366,20 @@ impl NeuralNetwork {
         let mut offset = 0;
         let layers = pairs(self.sizes.iter())
             .map(|(&input_size, &output_size)| {
-                let matrix_size = input_size * output_size;
+                let matrix_size = input_size.size * output_size.size;
                 let matrix = self.values[offset..offset + matrix_size]
-                    .chunks(input_size)
+                    .chunks(input_size.size)
                     .map(|row| row.to_vec())
                     .collect();
                 offset += matrix_size;
-                let bias = self.values[offset..offset + output_size].to_vec();
-                offset += output_size;
+                let bias = self.values[offset..offset + output_size.size].to_vec();
+                offset += output_size.size;
                 Layer {
-                    input_size,
-                    output_size,
+                    input_size: input_size.size,
+                    output_size: output_size.size,
                     matrix,
                     bias,
+                    func: output_size.func,
                 }
             })
             .collect();
@@ -295,9 +388,15 @@ impl NeuralNetwork {
     }
 
     pub fn from_unoptimized(unoptimized: &NeuralNetworkUnoptimized) -> Self {
-        let sizes: Vec<usize> = std::iter::once(unoptimized.layers[0].input_size)
-            .chain(unoptimized.layers.iter().map(|layer| layer.output_size))
-            .collect();
+        let sizes: Vec<LayerDescription> =
+            std::iter::once(LayerDescription::none(unoptimized.layers[0].input_size))
+                .chain(
+                    unoptimized
+                        .layers
+                        .iter()
+                        .map(|layer| LayerDescription::new(layer.output_size, layer.func)),
+                )
+                .collect();
 
         let values: Vec<f32> = unoptimized
             .layers
@@ -379,14 +478,14 @@ impl NeuralNetworkUnoptimized {
         }
     }
 
-    pub fn add_random_hidden_layer(&mut self, rng: &mut impl Rng) {
+    pub fn add_random_hidden_layer(&mut self, func: ActivationFunction, rng: &mut impl Rng) {
         let layer_index = rng.gen_range(0..=self.layers.len());
-        self.add_hidden_layer(layer_index);
+        self.add_hidden_layer(layer_index, func);
     }
 
     // layer_index = 0 - layer right after input
     // layer_index = layers.len() - layer right before output
-    pub fn add_hidden_layer(&mut self, layer_index: usize) {
+    pub fn add_hidden_layer(&mut self, layer_index: usize, func: ActivationFunction) {
         let input_size = if layer_index == 0 {
             self.layers[0].input_size
         } else {
@@ -409,6 +508,7 @@ impl NeuralNetworkUnoptimized {
             output_size,
             matrix,
             bias: vec![0.0; output_size],
+            func,
         };
 
         self.layers.insert(layer_index, new_layer);
@@ -483,6 +583,11 @@ impl NeuralNetworkUnoptimized {
                 output_size,
                 matrix,
                 bias,
+                func: if i == 0 || i == neuron_counts.len() - 2 {
+                    ActivationFunction::None
+                } else {
+                    ActivationFunction::ReluLeakySmooth10
+                },
             });
         }
         NeuralNetworkUnoptimized { layers }
@@ -530,9 +635,8 @@ mod tests2 {
                     NeuralNetworkUnoptimized::generate_neuron_counts(&mut rng, size);
                 let mut nn = NeuralNetworkUnoptimized::generate_random(&mut rng, &neuron_counts);
                 let mut input = generate_random_input(&mut rng, neuron_counts[0]);
-                activation_vector(&mut input);
                 let output_before = nn.calc(&input);
-                nn.add_random_hidden_layer(&mut rng);
+                nn.add_random_hidden_layer(ActivationFunction::Relu, &mut rng);
                 let output_after = nn.calc(&input);
                 assert_relative_eq!(
                     output_before.as_slice(),
@@ -600,7 +704,11 @@ mod tests {
 
     #[test]
     fn test_neural_network_3_2_3() {
-        let mut nn = NeuralNetwork::new_zeros(vec![3, 2, 3]);
+        let mut nn = NeuralNetwork::new_zeros(vec![
+            LayerDescription::none(3),
+            LayerDescription::relu(2),
+            LayerDescription::none(3),
+        ]);
 
         // Set weights and biases manually
         nn.values = vec![
@@ -627,7 +735,11 @@ mod tests {
 
     #[test]
     fn test_neural_network_2_2_1() {
-        let mut nn = NeuralNetwork::new_zeros(vec![2, 2, 1]);
+        let mut nn = NeuralNetwork::new_zeros(vec![
+            LayerDescription::none(2),
+            LayerDescription::relu(2),
+            LayerDescription::none(1),
+        ]);
 
         nn.values = vec![
             // First layer (2x2 matrix transposed + 2 biases)
@@ -649,7 +761,11 @@ mod tests {
     }
 
     fn create_test_network() -> NeuralNetwork {
-        let sizes = vec![3, 4, 2];
+        let sizes = vec![
+            LayerDescription::none(3),
+            LayerDescription::relu(4),
+            LayerDescription::none(2),
+        ];
         let mut nn = NeuralNetwork::new_zeros(sizes);
         nn.values = vec![
             // First layer (3x4 matrix + 4 biases)

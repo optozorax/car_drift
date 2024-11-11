@@ -1,6 +1,7 @@
 use crate::common::*;
 use crate::evolution::*;
 use crate::math::project_to_segment;
+use crate::math::*;
 use crate::nn::*;
 use crate::physics::*;
 use crate::storage::*;
@@ -17,7 +18,7 @@ use egui::Shape;
 use egui::Stroke;
 use egui::Ui;
 use egui::*;
-use egui::{emath, Pos2, Rect, Sense, Vec2};
+use egui::{emath, Rect, Sense};
 use egui_plot::Corner;
 use egui_plot::Legend;
 use egui_plot::Line;
@@ -32,11 +33,11 @@ use std::collections::VecDeque;
 #[serde(default)]
 struct Drifts {
     drift_recording: bool,
-    drifts: VecDeque<VecDeque<Pos2>>,
+    drifts: VecDeque<VecDeque<Vecx2>>,
 }
 
 impl Drifts {
-    fn process_point(&mut self, point: Pos2, is_drift: bool) {
+    fn process_point(&mut self, point: Vecx2, is_drift: bool) {
         if is_drift {
             if !self.drift_recording {
                 self.drift_recording = true;
@@ -61,7 +62,7 @@ impl Graphs {
         &mut self,
         group: impl Into<String>,
         name: impl Into<String>,
-        value: f32,
+        value: fxx,
         color: egui::Color32,
         params: &InterfaceParameters,
     ) {
@@ -86,7 +87,7 @@ impl Graphs {
 #[serde(default)]
 pub struct TemplateApp {
     // in car local coordinates
-    trajectories: VecDeque<Pos2>,
+    trajectories: VecDeque<Vecx2>,
     points_count: usize,
 
     graphs: Graphs,
@@ -100,7 +101,7 @@ pub struct TemplateApp {
     // rewards: Storage2<Reward>,
     points: Vec<PointsStorage>,
     current_edit: usize,
-    offset: Pos2,
+    offset: Vecx2,
     drag_pos: Option<usize>,
     enable_edit_track: bool,
 
@@ -130,7 +131,7 @@ pub struct TemplateApp {
     current_start_reward: usize,
 
     record_user_actions: bool,
-    records: Vec<(Vec<f32>, Vec<f32>)>,
+    records: Vec<(Vec<fxx>, Vec<fxx>)>,
 }
 
 impl Default for TemplateApp {
@@ -168,55 +169,63 @@ impl Default for TemplateApp {
         // params_sim.nn.use_ranking_network = true;
         // // params_sim.simulation_stop_penalty.value = 0.1;
         // params_sim.nn.ranking_hidden_layers = vec![10, 5];
-        // params_sim.eval_add_other_physics = vec![
-        //     PhysicsPatch {
-        //         traction: Some(0.15),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         traction: Some(0.5),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         traction: Some(1.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         friction_coef: Some(1.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         friction_coef: Some(0.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         acceleration_ratio: Some(1.0),
-        //         ..PhysicsPatch::default()
-        //     },
-        //     PhysicsPatch {
-        //         acceleration_ratio: Some(0.6),
-        //         ..PhysicsPatch::default()
-        //     },
-        // ];
-
-        params_sim.nn.output_discrete_action = true;
-        params_sim.nn.pass_dirs_diff = true;
-        params_sim.simulation_simple_physics = 0.0;
-
-        params_sim.nn.use_ranking_network = true;
-        params_sim.nn.rank_without_physics = true; // better than using physics 🥲
-                                                   // params_sim.nn.rank_close_to_zero = true;
-                                                   // params_sim.nn.output_discrete_action = true;
-        params_sim.nn.ranking_hidden_layers = vec![
-            LayerDescription::relu_best(10),
-            LayerDescription::relu_best(10),
+        params_sim.eval_add_other_physics = vec![
+            PhysicsPatch {
+                traction: Some(0.15),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                traction: Some(0.5),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                traction: Some(1.0),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                friction_coef: Some(1.0),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                friction_coef: Some(0.0),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                acceleration_ratio: Some(1.0),
+                ..PhysicsPatch::default()
+            },
+            PhysicsPatch {
+                acceleration_ratio: Some(0.6),
+                ..PhysicsPatch::default()
+            },
         ];
+
         params_sim.simulation_simple_physics = 0.0;
         params_sim.simulation_stop_penalty.value = 50.;
         params_sim.tracks_enable_mirror = false;
+        params_sim.nn.pass_dirs_diff = true;
+        params_sim.evolution_population_size = 30;
+        params_sim.evolution_generation_count = 300;
+        params_sim.evolution_distance_to_solution = 1.;
+        params_sim.evolution_start_input_range = 1.;
+
+        params_sim.nn.use_ranking_network = true;
+        params_sim.nn.rank_without_physics = true;
+        params_sim.tracks_enable_mirror = true;
+
+        params_sim.enable_track("straight_45");
+        params_sim.enable_track("loop");
+        params_sim.enable_track("straight_turn");
+        // params_sim.enable_track("bubble_straight");
+        // params_sim.enable_track("bubble_180");
+        params_sim.enable_track("separation");
+
         // params_sim.simulation_random_output_second_way = true;
-        // params_sim.random_output_probability = 0.001;
+        // params_sim.random_output_probability = 0.05;
         // params_sim.evolution_learning_rate = 0.9;
+
+        params_sim.nn.ranking_hidden_layers =
+            vec![LayerDescription::new(10, ActivationFunction::SqrtSigmoid)];
 
         Self {
             rng: StdRng::seed_from_u64(42),
@@ -232,7 +241,7 @@ impl Default for TemplateApp {
 
             points: track_complex().1,
             current_edit: 0,
-            offset: pos2(0., 0.),
+            offset: Vecx2::new(0., 0.),
             drag_pos: None,
             enable_edit_track: false,
 
@@ -297,7 +306,7 @@ impl TemplateApp {
         self.graphs.clear();
         self.points_count = 0;
         self.drifts.iter_mut().for_each(|x| x.drifts.clear());
-        self.offset = pos2(0., 0.);
+        self.offset = Vecx2::new(0., 0.);
         self.drag_pos = None;
         self.quota = 0;
         self.nn_processor.reset();
@@ -410,7 +419,7 @@ impl eframe::App for TemplateApp {
                                     ui.text_edit_multiline(&mut self.current_nn);
                                 });
                                 if ui.button("Set NN").clicked() {
-                                    let numbers: Vec<f32> =
+                                    let numbers: Vec<fxx> =
                                         match serde_json::from_str(&self.current_nn) {
                                             Ok(ok) => ok,
                                             Err(err) => {
@@ -481,7 +490,10 @@ impl eframe::App for TemplateApp {
                                             storage.is_reward
                                         );
                                         for point in &storage.points {
-                                            println!("    pos2({:.2}, {:.2}),", point.x, point.y);
+                                            println!(
+                                                "    Vecx2::new{:.2}, {:.2}),",
+                                                point.x, point.y
+                                            );
                                         }
                                         println!("]}},");
                                     }
@@ -506,7 +518,7 @@ impl eframe::App for TemplateApp {
                                     "Current segment: {:.2}",
                                     self.simulation
                                         .reward_path_processor
-                                        .get_current_segment_f32()
+                                        .get_current_segment_fxx()
                                 ));
                                 ui.label(format!(
                                     "All acquired: {}",
@@ -540,15 +552,17 @@ impl eframe::App for TemplateApp {
                     });
                     Frame::canvas(ui.style()).show(ui, |ui| {
                         let (mut response, painter) = ui.allocate_painter(
-                            Vec2::new(self.params_intr.canvas_size, self.params_intr.canvas_size),
+                            Vecx2::new(self.params_intr.canvas_size, self.params_intr.canvas_size)
+                                .into(),
                             Sense::click_and_drag(),
                         );
 
                         let from_screen = emath::RectTransform::from_to(
                             response.rect,
                             Rect::from_center_size(
-                                self.simulation.car.get_center() + self.offset.to_vec2(),
-                                Vec2::new(self.params_intr.view_size, self.params_intr.view_size),
+                                (self.simulation.car.get_center() + self.offset).into(),
+                                Vecx2::new(self.params_intr.view_size, self.params_intr.view_size)
+                                    .into(),
                             ),
                         );
                         let to_screen = from_screen.inverse();
@@ -572,7 +586,7 @@ impl eframe::App for TemplateApp {
                                 let pos_delta =
                                     from_screen.transform_pos(pos_screen + delta_screen);
                                 let delta = pos_delta - pos;
-                                self.offset -= delta;
+                                self.offset -= delta.into();
                             }
                         }
 
@@ -589,11 +603,11 @@ impl eframe::App for TemplateApp {
                                         let pos_delta =
                                             from_screen.transform_pos(pos_screen + delta_screen);
                                         let delta = pos_delta - pos;
-                                        *point += delta;
+                                        *point += delta.into();
                                         response.mark_changed();
                                     } else if response.drag_started() {
                                         for (i, point) in storage.iter_mut().enumerate() {
-                                            if (*point - pos).length() < 30. * 2. {
+                                            if (*point - pos.into()).length() < 30. * 2. {
                                                 self.drag_pos = Some(i);
                                                 ui.output_mut(|o| {
                                                     o.cursor_icon = egui::CursorIcon::Move
@@ -602,7 +616,7 @@ impl eframe::App for TemplateApp {
                                                 let pos_delta = from_screen
                                                     .transform_pos(pos_screen + delta_screen);
                                                 let delta = pos_delta - pos;
-                                                *point += delta;
+                                                *point += delta.into();
                                                 response.mark_changed();
                                                 break;
                                             }
@@ -615,14 +629,14 @@ impl eframe::App for TemplateApp {
 
                             if response.clicked_by(PointerButton::Primary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
-                                    storage.push(from_screen.transform_pos(pos_screen));
+                                    storage.push(from_screen.transform_pos(pos_screen).into());
                                 }
                             } else if response.clicked_by(PointerButton::Secondary) {
                                 if let Some(pos_screen) = response.interact_pointer_pos() {
-                                    let pos = from_screen.transform_pos(pos_screen);
+                                    let pos = Vecx2::from(from_screen.transform_pos(pos_screen));
                                     let mut to_remove: Option<usize> = None;
                                     for (i, point) in storage.iter().enumerate() {
-                                        if (*point - pos).length() < 30. {
+                                        if (*point - pos.into()).length() < 30. {
                                             to_remove = Some(i);
                                             break;
                                         }
@@ -635,13 +649,13 @@ impl eframe::App for TemplateApp {
                                             .enumerate()
                                             .map(|(i, x)| {
                                                 let (a, b) = (x[0], x[1]);
-                                                let (res, t) = project_to_segment(pos, a, b);
+                                                let (res, t) = project_to_segment(pos.into(), a, b);
                                                 (i, res, (pos - res).length(), t)
                                             })
                                             .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
                                             .map(|x| x.0)
                                             .unwrap();
-                                        storage.insert(x + 1, pos);
+                                        storage.insert(x + 1, pos.into());
                                     }
                                 }
                             }
@@ -651,9 +665,10 @@ impl eframe::App for TemplateApp {
                             for (storage_pos, storage) in self.points.iter().enumerate() {
                                 for point in &storage.points {
                                     painter.add(Shape::circle_stroke(
-                                        to_screen.transform_pos(*point),
-                                        (to_screen.transform_pos(*point)
-                                            - to_screen.transform_pos(*point + vec2(30., 0.)))
+                                        to_screen.transform_pos(point.into()),
+                                        (to_screen
+                                            .transform_pos(Pos2::from(point) + vec2(30., 0.)))
+                                        .to_vec2()
                                         .length(),
                                         Stroke::new(2.0, Color32::from_rgb(0, 0, 0)),
                                     ));
@@ -663,7 +678,7 @@ impl eframe::App for TemplateApp {
                                     storage
                                         .points
                                         .iter()
-                                        .map(|p| to_screen.transform_pos(*p))
+                                        .map(|p| to_screen.transform_pos(p.into()))
                                         .collect(),
                                     Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
                                 ));
@@ -672,7 +687,7 @@ impl eframe::App for TemplateApp {
                                     painter.add(painter.fonts(|f| {
                                         Shape::text(
                                             f,
-                                            to_screen.transform_pos(*point),
+                                            to_screen.transform_pos(point.into()),
                                             Align2::CENTER_CENTER,
                                             format!("{storage_pos}.{pos}"),
                                             FontId::new(10., FontFamily::Monospace),
@@ -686,7 +701,7 @@ impl eframe::App for TemplateApp {
                         painter.add(Shape::line(
                             self.trajectories
                                 .iter()
-                                .map(|p| to_screen.transform_pos(*p))
+                                .map(|p| to_screen.transform_pos(p.into()))
                                 .collect(),
                             Stroke::new(1.0, Color32::from_rgb(200, 200, 200)),
                         ));
@@ -694,7 +709,10 @@ impl eframe::App for TemplateApp {
                         for wheel_drifts in &self.drifts {
                             for drift in &wheel_drifts.drifts {
                                 painter.add(Shape::line(
-                                    drift.iter().map(|p| to_screen.transform_pos(*p)).collect(),
+                                    drift
+                                        .iter()
+                                        .map(|p| to_screen.transform_pos(p.into()))
+                                        .collect(),
                                     Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
                                 ));
                             }
@@ -716,16 +734,18 @@ impl eframe::App for TemplateApp {
                                     if simulation_i == 0 {
                                         painter.add(Shape::line(
                                             vec![
-                                                to_screen.transform_pos(origin),
-                                                to_screen
-                                                    .transform_pos(origin + (dir_pos - origin) * t),
+                                                to_screen.transform_pos(origin.into()),
+                                                to_screen.transform_pos(
+                                                    (origin + (dir_pos - origin) * t).into(),
+                                                ),
                                             ],
                                             Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
                                         ));
                                         if self.params_sim.nn.pass_dirs_second_layer {
                                             painter.add(Shape::circle_filled(
-                                                to_screen
-                                                    .transform_pos(origin + (dir_pos - origin) * t),
+                                                to_screen.transform_pos(
+                                                    (origin + (dir_pos - origin) * t).into(),
+                                                ),
                                                 3.,
                                                 Color32::from_rgb(0, 0, 255),
                                             ));
@@ -733,17 +753,19 @@ impl eframe::App for TemplateApp {
                                                 painter.add(Shape::line(
                                                     vec![
                                                         to_screen.transform_pos(
-                                                            origin + (dir_pos - origin) * t,
+                                                            (origin + (dir_pos - origin) * t)
+                                                                .into(),
                                                         ),
                                                         to_screen.transform_pos(
-                                                            origin + (dir_pos - origin) * t2,
+                                                            (origin + (dir_pos - origin) * t2)
+                                                                .into(),
                                                         ),
                                                     ],
                                                     Stroke::new(1.0, Color32::from_rgb(0, 0, 255)),
                                                 ));
                                                 painter.add(Shape::circle_filled(
                                                     to_screen.transform_pos(
-                                                        origin + (dir_pos - origin) * t2,
+                                                        (origin + (dir_pos - origin) * t2).into(),
                                                     ),
                                                     2.,
                                                     Color32::from_rgb(0, 0, 128),
@@ -758,7 +780,7 @@ impl eframe::App for TemplateApp {
                                       dirs,
                                       dirs_second_layer,
                                       internals,
-                                      current_segment_f32,
+                                      current_segment_fxx,
                                       simulation_vars| {
                                     self.graphs.add_point(
                                         "input",
@@ -889,16 +911,17 @@ impl eframe::App for TemplateApp {
                                                         dpenalty,
                                                         dirs,
                                                         dirs_second_layer,
-                                                        current_segment_f32,
+                                                        current_segment_fxx,
                                                         internals,
                                                         &self.params_sim,
+                                                        &self.params_phys,
                                                     )
                                                     .to_owned(),
                                                 input_arr.to_vec(),
                                             ));
                                         }
 
-                                        CarInput::from_f32(&input_arr)
+                                        CarInput::from_fxx(&input_arr)
                                     } else {
                                         let result = self.nn_processor.process(
                                             time_passed,
@@ -906,7 +929,7 @@ impl eframe::App for TemplateApp {
                                             dpenalty,
                                             dirs,
                                             dirs_second_layer,
-                                            current_segment_f32,
+                                            current_segment_fxx,
                                             internals,
                                             &self.params_sim,
                                             simulation_vars,
@@ -914,7 +937,7 @@ impl eframe::App for TemplateApp {
                                         self.graphs.add_point(
                                             "output",
                                             "brake",
-                                            result.brake as usize as f32,
+                                            result.brake as usize as fxx,
                                             Color32::BLUE,
                                             &self.params_intr,
                                         );
@@ -928,7 +951,7 @@ impl eframe::App for TemplateApp {
                                         self.graphs.add_point(
                                             "output",
                                             "remove_turn",
-                                            result.remove_turn as usize as f32,
+                                            result.remove_turn as usize as fxx,
                                             Color32::GREEN,
                                             &self.params_intr,
                                         );
@@ -944,7 +967,7 @@ impl eframe::App for TemplateApp {
                                 },
                                 &mut |i, pos, value| {
                                     self.drifts[i].process_point(
-                                        pos.to_pos2(),
+                                        pos,
                                         value > self.params_intr.drift_starts_at,
                                     );
                                 },
@@ -983,16 +1006,16 @@ impl eframe::App for TemplateApp {
                                     .allow_zoom([false, false])
                                     .allow_scroll([false, false])
                                     .allow_boxed_zoom(false)
-                                    .width(params.plot_size)
-                                    .height(params.plot_size)
+                                    .width(params.plot_size as f32)
+                                    .height(params.plot_size as f32)
                             };
                         for (group_name, graphs) in self.graphs.points.iter() {
                             ui.horizontal_wrapped(|ui| {
                                 for (name, (points, color)) in graphs {
                                     ui.allocate_ui(
                                         vec2(
-                                            self.params_intr.plot_size + 5.,
-                                            self.params_intr.plot_size + 5.,
+                                            self.params_intr.plot_size as f32 + 5.,
+                                            self.params_intr.plot_size as f32 + 5.,
                                         ),
                                         |ui| {
                                             create_plot(name, group_name, &self.params_intr).show(

@@ -1,13 +1,14 @@
 use crate::common::pairs;
+use crate::math::{fxx, Ex};
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 
 pub fn mul_matrix(
-    input: &[f32],
-    matrix: &[f32],
-    output: &mut [f32],
+    input: &[fxx],
+    matrix: &[fxx],
+    output: &mut [fxx],
     input_size: usize,
     output_size: usize,
 ) {
@@ -20,27 +21,27 @@ pub fn mul_matrix(
     }
 }
 
-pub fn sigmoid(x: f32) -> f32 {
-    1_f32 / (1_f32 + std::f32::consts::E.powf(-x))
+pub fn sigmoid(x: fxx) -> fxx {
+    1. / (1. + Ex.powf(-x))
 }
 
-pub fn sqrt_sigmoid(x: f32) -> f32 {
+pub fn sqrt_sigmoid(x: fxx) -> fxx {
     x / (1. + x * x).sqrt()
 }
 
-pub fn relu10(x: f32) -> f32 {
+pub fn relu10(x: fxx) -> fxx {
     x.clamp(0., 10.)
 }
 
-pub fn relu_leaky_10(x: f32) -> f32 {
+pub fn relu_leaky_10(x: fxx) -> fxx {
     if x > 0. { x } else { x * 0.1 }.clamp(-1., 10.)
 }
 
-pub fn relu(x: f32) -> f32 {
+pub fn relu(x: fxx) -> fxx {
     x.max(0.)
 }
 
-pub fn relu_leaky(x: f32) -> f32 {
+pub fn relu_leaky(x: fxx) -> fxx {
     if x > 0. {
         x
     } else {
@@ -48,7 +49,7 @@ pub fn relu_leaky(x: f32) -> f32 {
     }
 }
 
-pub fn relu_leaky_smooth_10(x: f32) -> f32 {
+pub fn relu_leaky_smooth_10(x: fxx) -> fxx {
     if x > 10. {
         11. - 1. / (1. + x - 10.)
     } else if x < -10. {
@@ -60,14 +61,14 @@ pub fn relu_leaky_smooth_10(x: f32) -> f32 {
     }
 }
 
-fn softmax(output: &mut [f32]) {
-    let sum = output.iter().map(|x| x.exp()).sum::<f32>();
+fn softmax(output: &mut [fxx]) {
+    let sum = output.iter().map(|x| x.exp()).sum::<fxx>();
     for x in output {
         *x = x.exp() / sum;
     }
 }
 
-fn argmax_one_hot(output: &mut [f32]) {
+fn argmax_one_hot(output: &mut [fxx]) {
     let max_index = output
         .iter()
         .enumerate()
@@ -79,7 +80,7 @@ fn argmax_one_hot(output: &mut [f32]) {
     }
 }
 
-fn strip_bad_values(output: &mut [f32]) {
+fn strip_bad_values(output: &mut [fxx]) {
     for x in output {
         *x = x.clamp(-1e6, 1e6);
         if x.is_nan() {
@@ -88,7 +89,7 @@ fn strip_bad_values(output: &mut [f32]) {
     }
 }
 
-fn sum_vectors(input: &[f32], vector: &[f32], output: &mut [f32]) {
+fn sum_vectors(input: &[fxx], vector: &[fxx], output: &mut [fxx]) {
     for (out, (in1, in2)) in output.iter_mut().zip(input.iter().zip(vector.iter())) {
         *out = in1 + in2;
     }
@@ -110,7 +111,7 @@ pub enum ActivationFunction {
 }
 
 impl ActivationFunction {
-    fn apply_single(&self, x: f32) -> f32 {
+    fn apply_single(&self, x: fxx) -> fxx {
         match *self {
             ActivationFunction::None => x,
             ActivationFunction::Relu => relu(x),
@@ -125,7 +126,7 @@ impl ActivationFunction {
         }
     }
 
-    fn apply_vector(&self, output: &mut [f32]) {
+    fn apply_vector(&self, output: &mut [fxx]) {
         match self {
             ActivationFunction::None => {}
             ActivationFunction::Relu => {
@@ -196,12 +197,12 @@ impl LayerDescription {
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct NeuralNetwork {
     sizes: Vec<LayerDescription>,
-    values: Vec<f32>,
+    values: Vec<fxx>,
 
-    reserved1: Vec<f32>,
-    reserved2: Vec<f32>,
+    reserved1: Vec<fxx>,
+    reserved2: Vec<fxx>,
 
-    regularization: f32,
+    regularization: fxx,
     calc_count: usize,
 }
 
@@ -220,7 +221,7 @@ impl NeuralNetwork {
         result
     }
 
-    pub fn new_params(sizes: Vec<LayerDescription>, params: &[f32]) -> Self {
+    pub fn new_params(sizes: Vec<LayerDescription>, params: &[fxx]) -> Self {
         let values_size = Self::calc_nn_len(&sizes);
         assert_eq!(params.len(), values_size);
         let mut result = Self {
@@ -245,11 +246,11 @@ impl NeuralNetwork {
         &self.sizes
     }
 
-    pub fn get_values(&self) -> &[f32] {
+    pub fn get_values(&self) -> &[fxx] {
         &self.values
     }
 
-    pub fn get_values_mut(&mut self) -> &mut [f32] {
+    pub fn get_values_mut(&mut self) -> &mut [fxx] {
         &mut self.values
     }
 
@@ -271,7 +272,7 @@ impl NeuralNetwork {
         self.reserved2 = vec![0.; reserved_size];
     }
 
-    pub fn calc<'a>(&'a mut self, input: &[f32]) -> &'a [f32] {
+    pub fn calc<'a>(&'a mut self, input: &[fxx]) -> &'a [fxx] {
         let mut regularization = 0.;
         let mut values_count = 0;
         input
@@ -309,7 +310,7 @@ impl NeuralNetwork {
             std::mem::swap(&mut self.reserved1, &mut self.reserved2);
         }
 
-        self.regularization += regularization / values_count as f32;
+        self.regularization += regularization / values_count as fxx;
         self.calc_count += 1;
 
         &self.reserved1[..self.sizes.last().unwrap().size]
@@ -319,11 +320,11 @@ impl NeuralNetwork {
         *self.values.choose_mut(rng).unwrap() += rng.gen_range(-0.1..0.1);
     }
 
-    pub fn get_regularization(&self) -> f32 {
+    pub fn get_regularization(&self) -> fxx {
         if self.calc_count == 0 {
             0.
         } else {
-            self.regularization / self.calc_count as f32
+            self.regularization / self.calc_count as fxx
         }
     }
 }
@@ -332,8 +333,8 @@ impl NeuralNetwork {
 pub struct Layer {
     pub input_size: usize,
     pub output_size: usize,
-    pub matrix: Vec<Vec<f32>>, // outer vec has size output_size, inner vec has size input_size
-    pub bias: Vec<f32>,
+    pub matrix: Vec<Vec<fxx>>, // outer vec has size output_size, inner vec has size input_size
+    pub bias: Vec<fxx>,
     pub func: ActivationFunction,
 }
 
@@ -343,7 +344,7 @@ pub struct NeuralNetworkUnoptimized {
 }
 
 impl NeuralNetworkUnoptimized {
-    pub fn calc(&self, input: &[f32]) -> Vec<f32> {
+    pub fn calc(&self, input: &[fxx]) -> Vec<fxx> {
         self.layers.iter().fold(input.to_vec(), |input, layer| {
             let mut output = vec![0.0; layer.output_size];
             for (i, output_neuron) in output.iter_mut().enumerate() {
@@ -352,7 +353,7 @@ impl NeuralNetworkUnoptimized {
                         .iter()
                         .zip(input.iter())
                         .map(|(&weight, &input)| weight * input)
-                        .sum::<f32>()
+                        .sum::<fxx>()
                         + layer.bias[i],
                 );
             }
@@ -398,7 +399,7 @@ impl NeuralNetwork {
                 )
                 .collect();
 
-        let values: Vec<f32> = unoptimized
+        let values: Vec<fxx> = unoptimized
             .layers
             .iter()
             .flat_map(|layer| {
@@ -601,7 +602,7 @@ mod tests2 {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    fn generate_random_input(rng: &mut impl Rng, size: usize) -> Vec<f32> {
+    fn generate_random_input(rng: &mut impl Rng, size: usize) -> Vec<fxx> {
         (0..size).map(|_| rng.gen_range(-1.0..1.0)).collect()
     }
 

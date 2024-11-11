@@ -11,7 +11,6 @@ use crate::physics::Wall;
 use crate::physics::*;
 use crate::storage::egui_array_inner;
 use cmaes::DVector;
-use core::f32::consts::TAU;
 use differential_evolution::self_adaptive_de;
 use differential_evolution::Population;
 use egui::emath::RectTransform;
@@ -20,12 +19,10 @@ use egui::vec2;
 use egui::Color32;
 use egui::DragValue;
 use egui::Painter;
-use egui::Pos2;
 use egui::Shape;
 use egui::Slider;
 use egui::Stroke;
 use egui::Ui;
-use egui::Vec2;
 use rand::thread_rng;
 use rand::Rng;
 use rayon::iter::IndexedParallelIterator;
@@ -39,13 +36,13 @@ use std::time::Instant;
 // Number from 0 to 1
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Clamped {
-    pub value: f32,
-    pub start: f32,
-    pub end: f32,
+    pub value: fxx,
+    pub start: fxx,
+    pub end: fxx,
 }
 
 impl Clamped {
-    pub fn new(value: f32, start: f32, end: f32) -> Self {
+    pub fn new(value: fxx, start: fxx, end: fxx) -> Self {
         Self { value, start, end }
     }
 
@@ -70,9 +67,10 @@ pub struct NnParameters {
     pub pass_next_size: usize,
     pub hidden_layers: Vec<LayerDescription>,
     pub inv_distance: bool,
-    pub inv_distance_coef: f32,
-    pub inv_distance_pow: f32,
-    pub view_angle_ratio: f32,
+    pub inv_distance_coef: fxx,
+    pub inv_distance_pow: fxx,
+    pub view_angle_ratio: fxx,
+    pub pass_current_physics: bool,
 
     pub pass_dirs: bool,
     pub dirs_size: usize,
@@ -89,7 +87,7 @@ pub struct NnParameters {
     pub autoencoder_exits: usize,
     pub autoencoder_hidden_layers: Vec<LayerDescription>,
 
-    pub pass_time_mods: Vec<f32>,
+    pub pass_time_mods: Vec<fxx>,
 
     pub use_ranking_network: bool,
     pub ranking_hidden_layers: Vec<LayerDescription>,
@@ -101,16 +99,16 @@ pub struct NnParameters {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Default)]
 pub struct PhysicsPatch {
-    pub simple_physics: Option<f32>,
-    pub traction: Option<f32>,
-    pub acceleration_ratio: Option<f32>,
-    pub friction_coef: Option<f32>,
-    pub turn_speed: Option<f32>,
+    pub simple_physics: Option<fxx>,
+    pub traction: Option<fxx>,
+    pub acceleration_ratio: Option<fxx>,
+    pub friction_coef: Option<fxx>,
+    pub turn_speed: Option<fxx>,
     pub name: Option<String>,
 }
 
 impl PhysicsPatch {
-    pub fn get_text(name: &str, value: Option<f32>) -> String {
+    pub fn get_text(name: &str, value: Option<fxx>) -> String {
         if let Some(value) = value {
             format!(":{}{:.2}", name, value)
         } else {
@@ -130,14 +128,14 @@ impl PhysicsPatch {
         }
     }
 
-    pub fn simple_physics(value: f32) -> Self {
+    pub fn simple_physics(value: fxx) -> Self {
         Self {
             simple_physics: Some(value),
             ..Self::default()
         }
     }
 
-    pub fn simple_physics_ignored(value: f32) -> Self {
+    pub fn simple_physics_ignored(value: fxx) -> Self {
         Self {
             simple_physics: Some(value),
             name: Some(Self::get_text("s", Some(value)) + "_ignore"),
@@ -169,12 +167,12 @@ pub struct SimulationParameters {
     pub simulation_stop_penalty: Clamped, // ratio from 0 to 50
     pub simulation_scale_reward_to_time: bool, // if reward acquired earlier, it will be bigger
     pub simulation_steps_quota: usize,    // reasonable values from 1000 to 3000
-    pub simulation_simple_physics: f32,
+    pub simulation_simple_physics: fxx,
     pub simulation_enable_random_nn_output: bool,
-    pub simulation_random_output_range: f32,
+    pub simulation_random_output_range: fxx,
     pub simulation_use_output_regularization: bool,
     pub simulation_random_output_second_way: bool,
-    pub random_output_probability: f32,
+    pub random_output_probability: fxx,
 
     pub evolution_sample_mean: bool,
     pub evolution_generation_count: usize,
@@ -182,7 +180,7 @@ pub struct SimulationParameters {
     pub evolution_learning_rate: f64,
     pub evolution_distance_to_solution: f64,
     pub evolution_simple_add_mid_start: bool,
-    pub evolution_start_input_range: f32,
+    pub evolution_start_input_range: fxx,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -262,6 +260,7 @@ impl NnParameters {
     const CAR_OUTPUT_SIZE: usize = CarInput::SIZE;
     const CAR_OUTPUT_SIZE_CONVERTED: usize = 4;
     const POSSIBLE_ACTIONS_COUNT: usize = POSSIBLE_ACTIONS.len();
+    const PHYSICS_COEFS: usize = 4;
 
     pub fn get_ranking_input_size(&self) -> usize {
         if self.rank_without_physics {
@@ -293,6 +292,7 @@ impl NnParameters {
                 + self.pass_time_mods.len()
                 + self.pass_current_segment as usize * self.max_segments * self.max_tracks
                 + self.pass_dirs_second_layer as usize * self.dirs_size
+                + self.pass_current_physics as usize * Self::PHYSICS_COEFS
         }
     }
 
@@ -556,12 +556,12 @@ pub fn mutate_car(mut car: Car, params: &SimulationParameters) -> Car {
     let mut rng = thread_rng();
     car.change_position(
         rng.gen_range(-angle_range..angle_range),
-        vec2(
+        vecx2(
             rng.gen_range(-pos_range..pos_range),
             rng.gen_range(-pos_range..pos_range),
         ),
         rng.gen_range(-angle_speed_range..angle_speed_range),
-        vec2(
+        vecx2(
             rng.gen_range(-speed_range..speed_range),
             rng.gen_range(-speed_range..speed_range),
         ),
@@ -576,14 +576,19 @@ pub fn place_car_to_reward(mut car: Car, rewards: &[Reward], pos: usize) -> Car 
     let (a, b) = (rewards[pos].center, rewards[pos + 1].center);
     let current_dir = b - a;
     let current_angle = current_dir.y.atan2(current_dir.x);
-    car.change_position(current_angle - start_angle, a - car_start, 0., vec2(0., 0.));
+    car.change_position(
+        current_angle - start_angle,
+        a - car_start,
+        0.,
+        vecx2(0., 0.),
+    );
     car
 }
 
 #[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct PointsStorage {
     pub is_reward: bool,
-    pub points: Vec<Pos2>,
+    pub points: Vec<Vecx2>,
 }
 
 impl PointsStorage {
@@ -594,7 +599,7 @@ impl PointsStorage {
     }
 }
 
-pub fn egui_pos2(pos: &mut Pos2, ui: &mut Ui, data_id: egui::Id) {
+pub fn egui_pos2(pos: &mut Vecx2, ui: &mut Ui, data_id: egui::Id) {
     egui::Grid::new(data_id.with("wall_grid"))
         .num_columns(2)
         .spacing([40.0, 4.0])
@@ -641,19 +646,19 @@ pub fn track_straight_line() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-14.23, 17.90),
-                    pos2(5635.54, 246.73),
-                    pos2(5640.00, -98.93),
-                    pos2(6238.29, -76.85),
-                    pos2(6273.62, 485.02),
-                    pos2(5630.75, 488.32),
-                    pos2(-100.47, 409.92),
-                    pos2(-14.23, 17.90),
+                    vecx2(-14.23, 17.90),
+                    vecx2(5635.54, 246.73),
+                    vecx2(5640.00, -98.93),
+                    vecx2(6238.29, -76.85),
+                    vecx2(6273.62, 485.02),
+                    vecx2(5630.75, 488.32),
+                    vecx2(-100.47, 409.92),
+                    vecx2(-14.23, 17.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
-                points: vec![pos2(255.56, 251.16), pos2(5484.87, 358.62)],
+                points: vec![vecx2(255.56, 251.16), vecx2(5484.87, 358.62)],
             },
         ],
     )
@@ -667,39 +672,39 @@ pub fn track_turn_right_smooth() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(84.64, -1.89),
-                    pos2(1227.77, -3.24),
-                    pos2(2054.61, 103.97),
-                    pos2(2971.24, 374.67),
-                    pos2(3590.36, 815.56),
-                    pos2(3966.93, 1354.28),
-                    pos2(4023.21, 1911.76),
-                    pos2(4039.29, 2559.02),
-                    pos2(4052.83, 2951.00),
-                    pos2(2972.12, 2941.26),
-                    pos2(2973.34, 2549.38),
-                    pos2(3669.42, 2560.36),
-                    pos2(3660.04, 1903.72),
-                    pos2(3590.36, 1490.97),
-                    pos2(3282.13, 1095.64),
-                    pos2(2814.44, 787.42),
-                    pos2(1999.67, 558.26),
-                    pos2(1249.21, 438.99),
-                    pos2(86.01, 445.69),
-                    pos2(84.67, -1.90),
+                    vecx2(84.64, -1.89),
+                    vecx2(1227.77, -3.24),
+                    vecx2(2054.61, 103.97),
+                    vecx2(2971.24, 374.67),
+                    vecx2(3590.36, 815.56),
+                    vecx2(3966.93, 1354.28),
+                    vecx2(4023.21, 1911.76),
+                    vecx2(4039.29, 2559.02),
+                    vecx2(4052.83, 2951.00),
+                    vecx2(2972.12, 2941.26),
+                    vecx2(2973.34, 2549.38),
+                    vecx2(3669.42, 2560.36),
+                    vecx2(3660.04, 1903.72),
+                    vecx2(3590.36, 1490.97),
+                    vecx2(3282.13, 1095.64),
+                    vecx2(2814.44, 787.42),
+                    vecx2(1999.67, 558.26),
+                    vecx2(1249.21, 438.99),
+                    vecx2(86.01, 445.69),
+                    vecx2(84.67, -1.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(251.92, 250.12),
-                    pos2(1234.09, 215.53),
-                    pos2(2034.77, 349.62),
-                    pos2(2942.04, 604.14),
-                    pos2(3430.01, 958.38),
-                    pos2(3786.43, 1417.46),
-                    pos2(3839.26, 1887.05),
-                    pos2(3851.00, 2485.98),
+                    vecx2(251.92, 250.12),
+                    vecx2(1234.09, 215.53),
+                    vecx2(2034.77, 349.62),
+                    vecx2(2942.04, 604.14),
+                    vecx2(3430.01, 958.38),
+                    vecx2(3786.43, 1417.46),
+                    vecx2(3839.26, 1887.05),
+                    vecx2(3851.00, 2485.98),
                 ],
             },
         ],
@@ -714,27 +719,27 @@ pub fn track_turn_left_90() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(80.34, -5.05),
-                    pos2(997.84, -6.53),
-                    pos2(997.84, -1646.50),
-                    pos2(994.08, -2093.93),
-                    pos2(1880.17, -2085.06),
-                    pos2(1878.69, -1653.10),
-                    pos2(1457.33, -1649.46),
-                    pos2(1466.19, 534.11),
-                    pos2(87.06, 524.75),
-                    pos2(78.86, -5.05),
+                    vecx2(80.34, -5.05),
+                    vecx2(997.84, -6.53),
+                    vecx2(997.84, -1646.50),
+                    vecx2(994.08, -2093.93),
+                    vecx2(1880.17, -2085.06),
+                    vecx2(1878.69, -1653.10),
+                    vecx2(1457.33, -1649.46),
+                    vecx2(1466.19, 534.11),
+                    vecx2(87.06, 524.75),
+                    vecx2(78.86, -5.05),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(258.24, 250.23),
-                    pos2(785.25, 251.82),
-                    pos2(1063.20, 200.65),
-                    pos2(1211.43, 80.65),
-                    pos2(1231.00, -149.45),
-                    pos2(1220.93, -1508.56),
+                    vecx2(258.24, 250.23),
+                    vecx2(785.25, 251.82),
+                    vecx2(1063.20, 200.65),
+                    vecx2(1211.43, 80.65),
+                    vecx2(1231.00, -149.45),
+                    vecx2(1220.93, -1508.56),
                 ],
             },
         ],
@@ -748,28 +753,28 @@ pub fn track_turn_left_180() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(68.68, -37.37),
-                    pos2(68.39, 495.62),
-                    pos2(1628.53, 506.55),
-                    pos2(1626.82, -437.56),
-                    pos2(70.41, -430.71),
-                    pos2(75.44, -1071.74),
-                    pos2(-334.32, -1068.79),
-                    pos2(-332.84, -36.24),
-                    pos2(68.70, -37.34),
-                    pos2(1219.76, -44.18),
+                    vecx2(68.68, -37.37),
+                    vecx2(68.39, 495.62),
+                    vecx2(1628.53, 506.55),
+                    vecx2(1626.82, -437.56),
+                    vecx2(70.41, -430.71),
+                    vecx2(75.44, -1071.74),
+                    vecx2(-334.32, -1068.79),
+                    vecx2(-332.84, -36.24),
+                    vecx2(68.70, -37.34),
+                    vecx2(1219.76, -44.18),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(251.38, 247.87),
-                    pos2(987.99, 246.03),
-                    pos2(1315.29, 175.24),
-                    pos2(1449.97, -39.40),
-                    pos2(1328.72, -223.41),
-                    pos2(953.16, -260.21),
-                    pos2(238.07, -248.15),
+                    vecx2(251.38, 247.87),
+                    vecx2(987.99, 246.03),
+                    vecx2(1315.29, 175.24),
+                    vecx2(1449.97, -39.40),
+                    vecx2(1328.72, -223.41),
+                    vecx2(953.16, -260.21),
+                    vecx2(238.07, -248.15),
                 ],
             },
         ],
@@ -783,20 +788,20 @@ pub fn track_turn_around() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(550.85, -8.85),
-                    pos2(552.00, 501.00),
-                    pos2(-2048.97, 486.81),
-                    pos2(-2051.63, -17.28),
-                    pos2(521.62, -12.89),
+                    vecx2(550.85, -8.85),
+                    vecx2(552.00, 501.00),
+                    vecx2(-2048.97, 486.81),
+                    vecx2(-2051.63, -17.28),
+                    vecx2(521.62, -12.89),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(-200.11, 253.13),
-                    pos2(-959.28, 250.08),
-                    pos2(-1433.05, 248.37),
-                    pos2(-1783.67, 248.37),
+                    vecx2(-200.11, 253.13),
+                    vecx2(-959.28, 250.08),
+                    vecx2(-1433.05, 248.37),
+                    vecx2(-1783.67, 248.37),
                 ],
             },
         ],
@@ -810,50 +815,50 @@ pub fn track_smooth_left_and_right() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(110.72, 101.35),
-                    pos2(1391.74, -7.79),
-                    pos2(1805.02, -432.51),
-                    pos2(1927.44, -1337.17),
-                    pos2(2159.11, -1920.08),
-                    pos2(2786.96, -2298.42),
-                    pos2(3761.07, -2298.42),
-                    pos2(4246.98, -1890.44),
-                    pos2(4414.30, -1315.14),
-                    pos2(4428.05, -613.78),
-                    pos2(4150.72, 46.32),
-                    pos2(4778.57, 322.66),
-                    pos2(4638.04, 662.90),
-                    pos2(3654.31, 253.14),
-                    pos2(3804.62, -109.54),
-                    pos2(4024.65, -666.50),
-                    pos2(4017.78, -1223.46),
-                    pos2(3839.00, -1718.54),
-                    pos2(3694.60, -1917.94),
-                    pos2(2876.35, -1911.06),
-                    pos2(2507.34, -1652.07),
-                    pos2(2351.48, -1347.23),
-                    pos2(2285.36, -489.60),
-                    pos2(1992.89, 117.08),
-                    pos2(1633.33, 401.70),
-                    pos2(976.30, 512.67),
-                    pos2(100.88, 529.78),
-                    pos2(110.83, 101.35),
+                    vecx2(110.72, 101.35),
+                    vecx2(1391.74, -7.79),
+                    vecx2(1805.02, -432.51),
+                    vecx2(1927.44, -1337.17),
+                    vecx2(2159.11, -1920.08),
+                    vecx2(2786.96, -2298.42),
+                    vecx2(3761.07, -2298.42),
+                    vecx2(4246.98, -1890.44),
+                    vecx2(4414.30, -1315.14),
+                    vecx2(4428.05, -613.78),
+                    vecx2(4150.72, 46.32),
+                    vecx2(4778.57, 322.66),
+                    vecx2(4638.04, 662.90),
+                    vecx2(3654.31, 253.14),
+                    vecx2(3804.62, -109.54),
+                    vecx2(4024.65, -666.50),
+                    vecx2(4017.78, -1223.46),
+                    vecx2(3839.00, -1718.54),
+                    vecx2(3694.60, -1917.94),
+                    vecx2(2876.35, -1911.06),
+                    vecx2(2507.34, -1652.07),
+                    vecx2(2351.48, -1347.23),
+                    vecx2(2285.36, -489.60),
+                    vecx2(1992.89, 117.08),
+                    vecx2(1633.33, 401.70),
+                    vecx2(976.30, 512.67),
+                    vecx2(100.88, 529.78),
+                    vecx2(110.83, 101.35),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(257.32, 247.26),
-                    pos2(1508.32, 197.59),
-                    pos2(2056.80, -456.76),
-                    pos2(2158.07, -1332.80),
-                    pos2(2369.81, -1773.12),
-                    pos2(2813.37, -2095.70),
-                    pos2(3726.17, -2087.27),
-                    pos2(4042.62, -1794.75),
-                    pos2(4209.94, -1277.47),
-                    pos2(4215.89, -625.99),
-                    pos2(4016.48, -138.96),
+                    vecx2(257.32, 247.26),
+                    vecx2(1508.32, 197.59),
+                    vecx2(2056.80, -456.76),
+                    vecx2(2158.07, -1332.80),
+                    vecx2(2369.81, -1773.12),
+                    vecx2(2813.37, -2095.70),
+                    vecx2(3726.17, -2087.27),
+                    vecx2(4042.62, -1794.75),
+                    vecx2(4209.94, -1277.47),
+                    vecx2(4215.89, -625.99),
+                    vecx2(4016.48, -138.96),
                 ],
             },
         ],
@@ -868,50 +873,50 @@ pub fn track_complex() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-8.88, -9.06),
-                    pos2(2150.00, -1.43),
-                    pos2(2142.86, -1431.43),
-                    pos2(3690.00, -1424.29),
-                    pos2(3687.09, 3202.46),
-                    pos2(-2832.30, 157.16),
-                    pos2(-2834.52, -3251.33),
-                    pos2(755.70, -3253.55),
-                    pos2(751.49, -4097.08),
-                    pos2(1868.51, -4094.22),
-                    pos2(1916.49, -2829.04),
-                    pos2(751.27, -2828.04),
-                    pos2(-2377.98, -2861.28),
-                    pos2(-1792.91, -341.48),
-                    pos2(-11.10, 580.45),
-                    pos2(-8.88, -9.06),
-                    pos2(-11.10, 580.45),
-                    pos2(2883.23, 591.53),
-                    pos2(2883.23, -862.84),
+                    vecx2(-8.88, -9.06),
+                    vecx2(2150.00, -1.43),
+                    vecx2(2142.86, -1431.43),
+                    vecx2(3690.00, -1424.29),
+                    vecx2(3687.09, 3202.46),
+                    vecx2(-2832.30, 157.16),
+                    vecx2(-2834.52, -3251.33),
+                    vecx2(755.70, -3253.55),
+                    vecx2(751.49, -4097.08),
+                    vecx2(1868.51, -4094.22),
+                    vecx2(1916.49, -2829.04),
+                    vecx2(751.27, -2828.04),
+                    vecx2(-2377.98, -2861.28),
+                    vecx2(-1792.91, -341.48),
+                    vecx2(-11.10, 580.45),
+                    vecx2(-8.88, -9.06),
+                    vecx2(-11.10, 580.45),
+                    vecx2(2883.23, 591.53),
+                    vecx2(2883.23, -862.84),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(249.86, 250.44),
-                    pos2(1953.63, 285.30),
-                    pos2(2266.79, 233.48),
-                    pos2(2435.79, 66.79),
-                    pos2(2485.06, -204.70),
-                    pos2(2484.85, -717.33),
-                    pos2(2609.34, -1050.41),
-                    pos2(2874.87, -1191.42),
-                    pos2(3175.06, -1060.41),
-                    pos2(3301.25, -774.23),
-                    pos2(3302.97, 488.77),
-                    pos2(2895.47, 1000.49),
-                    pos2(333.65, 1022.85),
-                    pos2(-1671.56, 191.94),
-                    pos2(-2228.68, -312.10),
-                    pos2(-2595.71, -2323.18),
-                    pos2(-2644.09, -2728.56),
-                    pos2(-2598.97, -2967.43),
-                    pos2(-2372.19, -3075.67),
-                    pos2(393.66, -3040.27),
+                    vecx2(249.86, 250.44),
+                    vecx2(1953.63, 285.30),
+                    vecx2(2266.79, 233.48),
+                    vecx2(2435.79, 66.79),
+                    vecx2(2485.06, -204.70),
+                    vecx2(2484.85, -717.33),
+                    vecx2(2609.34, -1050.41),
+                    vecx2(2874.87, -1191.42),
+                    vecx2(3175.06, -1060.41),
+                    vecx2(3301.25, -774.23),
+                    vecx2(3302.97, 488.77),
+                    vecx2(2895.47, 1000.49),
+                    vecx2(333.65, 1022.85),
+                    vecx2(-1671.56, 191.94),
+                    vecx2(-2228.68, -312.10),
+                    vecx2(-2595.71, -2323.18),
+                    vecx2(-2644.09, -2728.56),
+                    vecx2(-2598.97, -2967.43),
+                    vecx2(-2372.19, -3075.67),
+                    vecx2(393.66, -3040.27),
                 ],
             },
         ],
@@ -925,31 +930,31 @@ pub fn track_straight_45() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-77.00, 178.00),
-                    pos2(2558.78, -2103.75),
-                    pos2(2892.96, -1732.53),
-                    pos2(256.05, 574.77),
-                    pos2(-86.66, 186.21),
+                    vecx2(-77.00, 178.00),
+                    vecx2(2558.78, -2103.75),
+                    vecx2(2892.96, -1732.53),
+                    vecx2(256.05, 574.77),
+                    vecx2(-86.66, 186.21),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(430.68, 109.81),
-                    pos2(478.70, 57.43),
-                    pos2(548.55, -1.51),
-                    pos2(642.42, -88.83),
-                    pos2(725.37, -169.59),
-                    pos2(823.60, -256.91),
-                    pos2(1048.43, -459.92),
-                    pos2(1266.72, -647.64),
-                    pos2(1714.21, -1038.38),
-                    pos2(1934.68, -1237.02),
-                    pos2(2083.11, -1354.89),
-                    pos2(2242.46, -1485.87),
-                    pos2(2390.90, -1616.84),
-                    pos2(2506.59, -1719.43),
-                    pos2(2615.74, -1804.57),
+                    vecx2(430.68, 109.81),
+                    vecx2(478.70, 57.43),
+                    vecx2(548.55, -1.51),
+                    vecx2(642.42, -88.83),
+                    vecx2(725.37, -169.59),
+                    vecx2(823.60, -256.91),
+                    vecx2(1048.43, -459.92),
+                    vecx2(1266.72, -647.64),
+                    vecx2(1714.21, -1038.38),
+                    vecx2(1934.68, -1237.02),
+                    vecx2(2083.11, -1354.89),
+                    vecx2(2242.46, -1485.87),
+                    vecx2(2390.90, -1616.84),
+                    vecx2(2506.59, -1719.43),
+                    vecx2(2615.74, -1804.57),
                 ],
             },
         ],
@@ -963,93 +968,93 @@ pub fn track_loop() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(86.06, 43.66),
-                    pos2(1392.63, 43.17),
-                    pos2(1793.14, 4.34),
-                    pos2(2145.64, -91.17),
-                    pos2(2416.52, -250.92),
-                    pos2(2413.05, -907.29),
-                    pos2(2459.93, -1110.46),
-                    pos2(2598.85, -1221.59),
-                    pos2(2732.55, -1251.11),
-                    pos2(2890.57, -1249.37),
-                    pos2(3032.96, -1172.97),
-                    pos2(3128.46, -1041.00),
-                    pos2(3168.40, -926.39),
-                    pos2(3178.82, -252.66),
-                    pos2(3177.08, 275.22),
-                    pos2(3135.41, 540.90),
-                    pos2(3018.72, 718.56),
-                    pos2(2577.61, 706.56),
-                    pos2(2618.70, 495.43),
-                    pos2(2577.65, 706.61),
-                    pos2(2262.06, 750.83),
-                    pos2(2137.43, 947.83),
-                    pos2(2022.85, 1120.70),
-                    pos2(1876.11, 1193.06),
-                    pos2(1659.02, 1174.97),
-                    pos2(1421.82, 1132.76),
-                    pos2(1287.14, 1066.42),
-                    pos2(1102.21, 971.95),
-                    pos2(954.83, 726.59),
-                    pos2(167.53, 695.21),
-                    pos2(-492.26, 847.12),
-                    pos2(-614.34, 776.66),
-                    pos2(-663.20, 688.23),
-                    pos2(-693.45, 564.90),
-                    pos2(-688.80, 404.34),
-                    pos2(-646.91, 287.99),
-                    pos2(-567.80, 153.02),
-                    pos2(-421.20, 80.89),
-                    pos2(-232.71, 39.00),
-                    pos2(86.09, 43.65),
+                    vecx2(86.06, 43.66),
+                    vecx2(1392.63, 43.17),
+                    vecx2(1793.14, 4.34),
+                    vecx2(2145.64, -91.17),
+                    vecx2(2416.52, -250.92),
+                    vecx2(2413.05, -907.29),
+                    vecx2(2459.93, -1110.46),
+                    vecx2(2598.85, -1221.59),
+                    vecx2(2732.55, -1251.11),
+                    vecx2(2890.57, -1249.37),
+                    vecx2(3032.96, -1172.97),
+                    vecx2(3128.46, -1041.00),
+                    vecx2(3168.40, -926.39),
+                    vecx2(3178.82, -252.66),
+                    vecx2(3177.08, 275.22),
+                    vecx2(3135.41, 540.90),
+                    vecx2(3018.72, 718.56),
+                    vecx2(2577.61, 706.56),
+                    vecx2(2618.70, 495.43),
+                    vecx2(2577.65, 706.61),
+                    vecx2(2262.06, 750.83),
+                    vecx2(2137.43, 947.83),
+                    vecx2(2022.85, 1120.70),
+                    vecx2(1876.11, 1193.06),
+                    vecx2(1659.02, 1174.97),
+                    vecx2(1421.82, 1132.76),
+                    vecx2(1287.14, 1066.42),
+                    vecx2(1102.21, 971.95),
+                    vecx2(954.83, 726.59),
+                    vecx2(167.53, 695.21),
+                    vecx2(-492.26, 847.12),
+                    vecx2(-614.34, 776.66),
+                    vecx2(-663.20, 688.23),
+                    vecx2(-693.45, 564.90),
+                    vecx2(-688.80, 404.34),
+                    vecx2(-646.91, 287.99),
+                    vecx2(-567.80, 153.02),
+                    vecx2(-421.20, 80.89),
+                    vecx2(-232.71, 39.00),
+                    vecx2(86.09, 43.65),
                 ],
             },
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-225.21, 440.22),
-                    pos2(91.11, 415.14),
-                    pos2(1383.63, 435.24),
-                    pos2(1866.07, 348.80),
-                    pos2(2282.17, 248.29),
-                    pos2(2613.84, 79.44),
-                    pos2(2794.75, -107.50),
-                    pos2(2784.70, -913.57),
+                    vecx2(-225.21, 440.22),
+                    vecx2(91.11, 415.14),
+                    vecx2(1383.63, 435.24),
+                    vecx2(1866.07, 348.80),
+                    vecx2(2282.17, 248.29),
+                    vecx2(2613.84, 79.44),
+                    vecx2(2794.75, -107.50),
+                    vecx2(2784.70, -913.57),
                 ],
             },
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(2007.19, 328.93),
-                    pos2(1677.63, 857.40),
-                    pos2(1075.64, 447.04),
+                    vecx2(2007.19, 328.93),
+                    vecx2(1677.63, 857.40),
+                    vecx2(1075.64, 447.04),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(862.96, 227.59),
-                    pos2(1927.17, 162.67),
-                    pos2(2390.26, 5.65),
-                    pos2(2618.69, -284.78),
-                    pos2(2596.21, -688.33),
-                    pos2(2595.15, -923.22),
-                    pos2(2782.57, -1114.72),
-                    pos2(2976.93, -966.99),
-                    pos2(2991.32, -716.79),
-                    pos2(2996.44, 59.44),
-                    pos2(2645.06, 282.04),
-                    pos2(1959.63, 814.33),
-                    pos2(1723.76, 1043.03),
-                    pos2(1225.86, 732.50),
-                    pos2(962.03, 592.78),
-                    pos2(269.51, 562.66),
-                    pos2(-54.91, 590.48),
-                    pos2(-362.20, 610.78),
-                    pos2(-524.86, 475.04),
-                    pos2(-390.01, 273.18),
-                    pos2(-70.39, 226.72),
+                    vecx2(862.96, 227.59),
+                    vecx2(1927.17, 162.67),
+                    vecx2(2390.26, 5.65),
+                    vecx2(2618.69, -284.78),
+                    vecx2(2596.21, -688.33),
+                    vecx2(2595.15, -923.22),
+                    vecx2(2782.57, -1114.72),
+                    vecx2(2976.93, -966.99),
+                    vecx2(2991.32, -716.79),
+                    vecx2(2996.44, 59.44),
+                    vecx2(2645.06, 282.04),
+                    vecx2(1959.63, 814.33),
+                    vecx2(1723.76, 1043.03),
+                    vecx2(1225.86, 732.50),
+                    vecx2(962.03, 592.78),
+                    vecx2(269.51, 562.66),
+                    vecx2(-54.91, 590.48),
+                    vecx2(-362.20, 610.78),
+                    vecx2(-524.86, 475.04),
+                    vecx2(-390.01, 273.18),
+                    vecx2(-70.39, 226.72),
                 ],
             },
         ],
@@ -1063,29 +1068,29 @@ pub fn track_straight_turn() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-14.28, 17.83),
-                    pos2(6230.98, 178.47),
-                    pos2(6226.23, 514.13),
-                    pos2(8279.91, 511.92),
-                    pos2(8284.18, 1346.21),
-                    pos2(7831.66, 1351.39),
-                    pos2(7838.53, 917.79),
-                    pos2(5626.36, 905.14),
-                    pos2(5634.77, 516.46),
-                    pos2(-24.13, 409.14),
-                    pos2(-14.23, 17.90),
+                    vecx2(-14.28, 17.83),
+                    vecx2(6230.98, 178.47),
+                    vecx2(6226.23, 514.13),
+                    vecx2(8279.91, 511.92),
+                    vecx2(8284.18, 1346.21),
+                    vecx2(7831.66, 1351.39),
+                    vecx2(7838.53, 917.79),
+                    vecx2(5626.36, 905.14),
+                    vecx2(5634.77, 516.46),
+                    vecx2(-24.13, 409.14),
+                    vecx2(-14.23, 17.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(255.56, 251.16),
-                    pos2(5064.73, 336.38),
-                    pos2(5508.00, 347.74),
-                    pos2(5929.05, 519.46),
-                    pos2(6289.30, 727.45),
-                    pos2(6700.19, 736.97),
-                    pos2(7687.94, 738.33),
+                    vecx2(255.56, 251.16),
+                    vecx2(5064.73, 336.38),
+                    vecx2(5508.00, 347.74),
+                    vecx2(5929.05, 519.46),
+                    vecx2(6289.30, 727.45),
+                    vecx2(6700.19, 736.97),
+                    vecx2(7687.94, 738.33),
                 ],
             },
         ],
@@ -1099,39 +1104,39 @@ pub fn track_bubble_straight() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-14.23, 17.90),
-                    pos2(2599.76, 26.70),
-                    pos2(2966.35, -1636.05),
-                    pos2(3561.60, -2191.07),
-                    pos2(4591.47, -1977.75),
-                    pos2(5247.65, -1495.88),
-                    pos2(5542.16, -616.31),
-                    pos2(5592.24, 824.42),
-                    pos2(6848.82, 78.22),
-                    pos2(6597.50, -422.08),
-                    pos2(6983.78, -647.80),
-                    pos2(7460.51, 160.08),
-                    pos2(5576.49, 1328.17),
-                    pos2(5148.15, 1946.77),
-                    pos2(4013.86, 2054.23),
-                    pos2(3132.76, 1927.19),
-                    pos2(2680.58, 1198.54),
-                    pos2(2601.85, 440.19),
-                    pos2(-22.07, 424.51),
-                    pos2(-14.23, 17.90),
+                    vecx2(-14.23, 17.90),
+                    vecx2(2599.76, 26.70),
+                    vecx2(2966.35, -1636.05),
+                    vecx2(3561.60, -2191.07),
+                    vecx2(4591.47, -1977.75),
+                    vecx2(5247.65, -1495.88),
+                    vecx2(5542.16, -616.31),
+                    vecx2(5592.24, 824.42),
+                    vecx2(6848.82, 78.22),
+                    vecx2(6597.50, -422.08),
+                    vecx2(6983.78, -647.80),
+                    vecx2(7460.51, 160.08),
+                    vecx2(5576.49, 1328.17),
+                    vecx2(5148.15, 1946.77),
+                    vecx2(4013.86, 2054.23),
+                    vecx2(3132.76, 1927.19),
+                    vecx2(2680.58, 1198.54),
+                    vecx2(2601.85, 440.19),
+                    vecx2(-22.07, 424.51),
+                    vecx2(-14.23, 17.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(255.56, 251.16),
-                    pos2(2325.81, 275.87),
-                    pos2(3057.63, 318.99),
-                    pos2(3704.72, 628.55),
-                    pos2(4753.57, 1008.18),
-                    pos2(5653.04, 1040.02),
-                    pos2(6337.59, 638.05),
-                    pos2(7002.24, 236.07),
+                    vecx2(255.56, 251.16),
+                    vecx2(2325.81, 275.87),
+                    vecx2(3057.63, 318.99),
+                    vecx2(3704.72, 628.55),
+                    vecx2(4753.57, 1008.18),
+                    vecx2(5653.04, 1040.02),
+                    vecx2(6337.59, 638.05),
+                    vecx2(7002.24, 236.07),
                 ],
             },
         ],
@@ -1145,39 +1150,39 @@ pub fn track_bubble_180() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-14.23, 17.90),
-                    pos2(2599.76, 26.70),
-                    pos2(2966.35, -1636.05),
-                    pos2(3561.60, -2191.07),
-                    pos2(4591.47, -1977.75),
-                    pos2(5247.65, -1495.88),
-                    pos2(5542.16, -616.31),
-                    pos2(5592.24, 824.42),
-                    pos2(5576.49, 1328.17),
-                    pos2(5148.15, 1946.77),
-                    pos2(4013.86, 2054.23),
-                    pos2(3132.76, 1927.19),
-                    pos2(1337.52, 2671.57),
-                    pos2(867.80, 1516.32),
-                    pos2(1299.44, 1330.97),
-                    pos2(1598.02, 2027.67),
-                    pos2(2844.35, 1480.42),
-                    pos2(2601.85, 440.19),
-                    pos2(-22.07, 424.51),
-                    pos2(-14.23, 17.90),
+                    vecx2(-14.23, 17.90),
+                    vecx2(2599.76, 26.70),
+                    vecx2(2966.35, -1636.05),
+                    vecx2(3561.60, -2191.07),
+                    vecx2(4591.47, -1977.75),
+                    vecx2(5247.65, -1495.88),
+                    vecx2(5542.16, -616.31),
+                    vecx2(5592.24, 824.42),
+                    vecx2(5576.49, 1328.17),
+                    vecx2(5148.15, 1946.77),
+                    vecx2(4013.86, 2054.23),
+                    vecx2(3132.76, 1927.19),
+                    vecx2(1337.52, 2671.57),
+                    vecx2(867.80, 1516.32),
+                    vecx2(1299.44, 1330.97),
+                    vecx2(1598.02, 2027.67),
+                    vecx2(2844.35, 1480.42),
+                    vecx2(2601.85, 440.19),
+                    vecx2(-22.07, 424.51),
+                    vecx2(-14.23, 17.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(255.56, 251.16),
-                    pos2(2325.81, 275.87),
-                    pos2(2981.46, 318.99),
-                    pos2(3406.82, 462.62),
-                    pos2(3572.69, 897.69),
-                    pos2(3406.82, 1305.58),
-                    pos2(2891.40, 1770.22),
-                    pos2(1692.98, 2278.02),
+                    vecx2(255.56, 251.16),
+                    vecx2(2325.81, 275.87),
+                    vecx2(2981.46, 318.99),
+                    vecx2(3406.82, 462.62),
+                    vecx2(3572.69, 897.69),
+                    vecx2(3406.82, 1305.58),
+                    vecx2(2891.40, 1770.22),
+                    vecx2(1692.98, 2278.02),
                 ],
             },
         ],
@@ -1191,55 +1196,55 @@ pub fn track_separation() -> (String, Vec<PointsStorage>) {
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(-14.23, 17.90),
-                    pos2(1526.19, 7.75),
-                    pos2(2181.20, 126.85),
-                    pos2(2935.45, 103.39),
-                    pos2(3657.23, 532.85),
-                    pos2(3918.87, 926.21),
-                    pos2(3852.11, 1494.61),
-                    pos2(3956.76, 2126.16),
-                    pos2(4021.72, 2763.13),
-                    pos2(3954.50, 3156.18),
-                    pos2(3178.59, 3268.06),
-                    pos2(3140.70, 2840.41),
-                    pos2(3595.41, 2802.52),
-                    pos2(3529.11, 2160.45),
-                    pos2(3489.42, 1819.41),
-                    pos2(3166.42, 1536.11),
-                    pos2(2413.97, 1007.41),
-                    pos2(2085.56, 666.37),
-                    pos2(1549.65, 448.04),
-                    pos2(-28.29, 422.55),
-                    pos2(-14.23, 17.90),
+                    vecx2(-14.23, 17.90),
+                    vecx2(1526.19, 7.75),
+                    vecx2(2181.20, 126.85),
+                    vecx2(2935.45, 103.39),
+                    vecx2(3657.23, 532.85),
+                    vecx2(3918.87, 926.21),
+                    vecx2(3852.11, 1494.61),
+                    vecx2(3956.76, 2126.16),
+                    vecx2(4021.72, 2763.13),
+                    vecx2(3954.50, 3156.18),
+                    vecx2(3178.59, 3268.06),
+                    vecx2(3140.70, 2840.41),
+                    vecx2(3595.41, 2802.52),
+                    vecx2(3529.11, 2160.45),
+                    vecx2(3489.42, 1819.41),
+                    vecx2(3166.42, 1536.11),
+                    vecx2(2413.97, 1007.41),
+                    vecx2(2085.56, 666.37),
+                    vecx2(1549.65, 448.04),
+                    vecx2(-28.29, 422.55),
+                    vecx2(-14.23, 17.90),
                 ],
             },
             PointsStorage {
                 is_reward: true,
                 points: vec![
-                    pos2(255.56, 251.16),
-                    pos2(1368.96, 241.33),
-                    pos2(1919.10, 310.59),
-                    pos2(2586.74, 548.78),
-                    pos2(3025.21, 786.96),
-                    pos2(3331.97, 1048.60),
-                    pos2(3514.22, 1357.16),
-                    pos2(3691.05, 1777.60),
-                    pos2(3752.40, 2160.14),
-                    pos2(3813.75, 2775.45),
+                    vecx2(255.56, 251.16),
+                    vecx2(1368.96, 241.33),
+                    vecx2(1919.10, 310.59),
+                    vecx2(2586.74, 548.78),
+                    vecx2(3025.21, 786.96),
+                    vecx2(3331.97, 1048.60),
+                    vecx2(3514.22, 1357.16),
+                    vecx2(3691.05, 1777.60),
+                    vecx2(3752.40, 2160.14),
+                    vecx2(3813.75, 2775.45),
                 ],
             },
             PointsStorage {
                 is_reward: false,
                 points: vec![
-                    pos2(2332.59, 437.51),
-                    pos2(2810.95, 439.02),
-                    pos2(3249.43, 666.38),
-                    pos2(3485.81, 955.09),
-                    pos2(3462.35, 1252.82),
-                    pos2(3078.00, 1122.90),
-                    pos2(2747.79, 900.95),
-                    pos2(2332.77, 439.02),
+                    vecx2(2332.59, 437.51),
+                    vecx2(2810.95, 439.02),
+                    vecx2(3249.43, 666.38),
+                    vecx2(3485.81, 955.09),
+                    vecx2(3462.35, 1252.82),
+                    vecx2(3078.00, 1122.90),
+                    vecx2(2747.79, 900.95),
+                    vecx2(2332.77, 439.02),
                 ],
             },
         ],
@@ -1266,8 +1271,8 @@ pub fn get_all_tracks() -> Vec<(String, Vec<PointsStorage>)> {
 
 pub struct RewardPathProcessor {
     rewards: Vec<Reward>,
-    max_distance: f32,
-    current_segment_f32: f32,
+    max_distance: fxx,
+    current_segment_fxx: fxx,
 }
 
 impl RewardPathProcessor {
@@ -1275,11 +1280,11 @@ impl RewardPathProcessor {
         Self {
             rewards,
             max_distance: 0.,
-            current_segment_f32: 0.,
+            current_segment_fxx: 0.,
         }
     }
 
-    fn process_point(&mut self, point: Pos2, params: &SimulationParameters) -> f32 {
+    fn process_point(&mut self, point: Vecx2, params: &SimulationParameters) -> fxx {
         let mut reward_sum = 0.;
 
         let (segm, dist) = if self.rewards.len() >= 2 {
@@ -1302,28 +1307,28 @@ impl RewardPathProcessor {
                     })
                 })
                 .unwrap();
-            (pos as f32 + t, dist)
+            (pos as fxx + t, dist)
         } else {
             (0., 0.)
         };
-        self.current_segment_f32 = segm;
+        self.current_segment_fxx = segm;
 
         if self.max_distance < segm {
             if params.rewards_enable_distance_integral {
-                reward_sum += (self.current_segment_f32 - self.max_distance) / (dist + 1.0);
+                reward_sum += (self.current_segment_fxx - self.max_distance) / (dist + 1.0);
             }
-            self.max_distance = self.current_segment_f32;
+            self.max_distance = self.current_segment_fxx;
         }
 
         reward_sum
     }
 
     fn reset(&mut self) {
-        self.current_segment_f32 = 0.;
+        self.current_segment_fxx = 0.;
         self.max_distance = 0.;
     }
 
-    fn draw(&self, point: Pos2, painter: &Painter, to_screen: &RectTransform) {
+    fn draw(&self, point: Vecx2, painter: &Painter, to_screen: &RectTransform) {
         let projection1 = self
             .rewards
             .windows(2)
@@ -1338,8 +1343,8 @@ impl RewardPathProcessor {
             .1;
         painter.add(Shape::line(
             vec![
-                to_screen.transform_pos(point),
-                to_screen.transform_pos(projection1),
+                to_screen.transform_pos(point.into()),
+                to_screen.transform_pos(projection1.into()),
             ],
             Stroke::new(1.0, Color32::DARK_RED),
         ));
@@ -1347,24 +1352,24 @@ impl RewardPathProcessor {
         for (i, (a, b)) in pairs(self.rewards.iter()).enumerate() {
             painter.add(Shape::line(
                 vec![
-                    to_screen.transform_pos(a.center),
-                    to_screen.transform_pos(b.center),
+                    to_screen.transform_pos(a.center.into()),
+                    to_screen.transform_pos(b.center.into()),
                 ],
                 Stroke::new(1.0, Color32::DARK_GREEN),
             ));
         }
     }
 
-    pub fn distance_percent(&self) -> f32 {
-        self.max_distance / (self.rewards.len() as f32 - 1.0)
+    pub fn distance_percent(&self) -> fxx {
+        self.max_distance / (self.rewards.len() as fxx - 1.0)
     }
 
     pub fn all_acquired(&self) -> bool {
         (self.distance_percent() - 1.0).abs() < 1e-6
     }
 
-    pub fn get_current_segment_f32(&self) -> f32 {
-        self.current_segment_f32
+    pub fn get_current_segment_fxx(&self) -> fxx {
+        self.current_segment_fxx
     }
 
     pub fn get_rewards(&self) -> &[Reward] {
@@ -1372,7 +1377,7 @@ impl RewardPathProcessor {
     }
 }
 
-fn convert_dir(params: &NnParameters, intersection: Option<f32>) -> f32 {
+fn convert_dir(params: &NnParameters, intersection: Option<fxx>) -> fxx {
     if params.inv_distance {
         intersection
             .map(|x| params.inv_distance_coef / (x + 1.).powf(params.inv_distance_pow))
@@ -1383,11 +1388,11 @@ fn convert_dir(params: &NnParameters, intersection: Option<f32>) -> f32 {
 }
 
 pub struct NnProcessorAutoencoder {
-    input: Vec<f32>,
-    output: Vec<f32>,
+    input: Vec<fxx>,
+    output: Vec<fxx>,
     nn_input: NeuralNetwork,
     nn_output: NeuralNetwork,
-    autoencoder_loss: f32,
+    autoencoder_loss: fxx,
     calc_counts: usize,
     params: NnParameters,
 }
@@ -1405,7 +1410,7 @@ impl NnProcessorAutoencoder {
         }
     }
 
-    pub fn new(params: &[f32], nn_params: NnParameters) -> Self {
+    pub fn new(params: &[fxx], nn_params: NnParameters) -> Self {
         let (params_input, params_output) =
             params.split_at(nn_params.get_nn_autoencoder_input_len());
         Self {
@@ -1425,7 +1430,7 @@ impl NnProcessorAutoencoder {
         }
     }
 
-    pub fn process<'a>(&'a mut self, dirs: &[Option<f32>]) -> &'a [f32] {
+    pub fn process<'a>(&'a mut self, dirs: &[Option<fxx>]) -> &'a [fxx] {
         self.calc_counts += 1;
 
         let mut autoencoder_input_iter = self.input.iter_mut();
@@ -1441,20 +1446,20 @@ impl NnProcessorAutoencoder {
         for (intersection, prediction) in dirs.iter().zip(values_output.iter()) {
             sum += 1. / (1. + (convert_dir(&self.params, *intersection) - prediction).abs());
         }
-        self.autoencoder_loss += sum / dirs.len() as f32;
+        self.autoencoder_loss += sum / dirs.len() as fxx;
 
         values
     }
 
-    pub fn get_regularization_loss(&self) -> f32 {
+    pub fn get_regularization_loss(&self) -> fxx {
         self.nn_input.get_regularization() + self.nn_output.get_regularization()
     }
 
-    pub fn get_autoencoder_loss(&self) -> f32 {
+    pub fn get_autoencoder_loss(&self) -> fxx {
         if self.calc_counts == 0 {
             0.
         } else {
-            self.autoencoder_loss / self.calc_counts as f32
+            self.autoencoder_loss / self.calc_counts as fxx
         }
     }
 
@@ -1466,21 +1471,21 @@ impl NnProcessorAutoencoder {
 }
 
 #[rustfmt::skip]
-const BEST_AUTOENCODER_21_10_10_10_5: [f32; 1006] = [0.45737186,-0.17592742,0.41990036,0.3023682,0.46085286,0.09734252,0.20202918,0.18677261,0.15259826,0.08691186,0.16731122,0.10409911,-0.27700168,-0.013539409,-0.09711216,0.14397214,-0.15910262,0.21080758,0.43845347,0.07938459,0.47766662,0.49709564,0.5581285,0.5085441,0.37938422,0.13941869,-0.011706705,0.111483075,-0.3481085,-0.17621183,-0.16999112,0.33578566,0.33830214,0.3392177,0.46204475,0.43641356,0.02911971,-0.24209979,-0.13739654,0.07810422,-0.42370325,0.048519064,0.47701773,0.36765498,0.25073645,0.34227213,0.28530744,0.12449606,0.33620736,0.4206451,0.37811056,0.48892096,0.31235722,-0.019208623,0.28711075,-0.32138065,-0.48255187,-0.073856294,0.21494687,0.2527926,0.25357565,0.06038692,0.21669765,-0.4017394,0.0030092,0.027453631,-0.008625239,-0.12991595,-0.3729226,0.27464026,-0.35417527,-0.32996136,-0.3039164,-0.41292477,-0.008672744,-0.16740495,0.27102596,-0.25378257,-0.09404045,-0.34924185,0.4185815,-0.19595659,0.06775886,-0.40013322,0.0044076815,0.22488806,0.038864266,-0.38992977,-0.3962791,-0.008726857,-0.08023614,0.045806993,0.23833953,0.5205801,0.768315,0.30037403,-0.008285542,0.13156843,0.016080525,-0.41769928,-0.5351447,-0.2394889,0.4227838,0.29043153,0.3176221,-0.42664915,-0.20242606,-0.25436103,-0.005583709,0.16876525,0.41205645,-0.28080022,0.10476436,-0.31362674,-0.2677709,-0.42060456,-0.3070178,0.15683068,0.42874318,0.22397202,0.3479392,-0.08452995,0.15452468,0.3514351,-0.01399497,-0.40478998,-0.2482755,-0.1356977,-0.2107391,0.1617366,-0.24560514,-0.09844121,-0.05664088,0.016249405,-0.20677516,-0.057893697,-0.3120921,0.14034316,0.19313832,0.2763481,0.3531536,0.56920975,0.5262653,0.38728634,-0.030576818,0.6514924,-0.10670456,-0.069721915,0.25045338,-0.14655343,0.35060158,-0.10266501,0.63437945,0.32942742,0.45425716,0.074557275,0.39037,0.0637424,-0.17551796,-0.20605043,0.3715435,0.44256073,-0.0024101275,-0.19201526,-0.24129438,0.39782032,0.5097004,0.1726135,-0.3583182,-0.23892967,0.28712755,-0.21878761,0.21266371,-0.3139548,0.2520895,0.20426053,-0.38272342,-0.13531768,-0.37770674,-0.07767549,-0.079563916,0.076762915,-0.09228301,-0.15359625,0.39501822,-0.32253093,-0.05489093,-0.10004258,0.043926954,-0.21595538,0.42019904,-0.19991599,-0.2796001,-0.3063535,-0.1659193,0.11443508,-0.28578854,0.07319701,-0.2500814,-0.015817225,0.39411527,-0.14725995,0.39196688,-0.25877836,-0.04152623,-0.095975876,-0.15781116,0.028069556,-0.14534119,0.019865453,-0.06348205,-0.038866445,-0.12543958,0.0,-0.049645416,-0.008875614,-0.34252134,-0.02051096,0.0,0.0,0.027617633,0.20035297,-0.35912716,0.33826768,0.24858415,0.13768375,-0.03795594,-0.09491876,-0.5105505,-0.2659443,-0.45389396,0.11748606,0.09288216,0.32547277,-0.030020177,0.24329084,0.08851558,-0.42366457,-0.26695818,0.101017475,-0.49297047,0.36307758,-0.34514493,0.2988848,0.035871148,0.5472412,0.50963855,-0.45673212,0.40956378,-0.1742078,0.31611833,0.5084936,0.40096274,-0.1617916,0.42529443,0.28289756,0.31026813,0.1375107,0.032167792,-0.39572728,0.28746232,-0.04957891,0.20623049,0.15467656,-0.4147029,-0.11097115,0.8231028,0.20070969,0.4504164,-0.1172778,0.43438476,-0.3721964,0.4799559,0.5127816,0.22977056,0.5342281,-0.49618167,0.48291194,-0.54680806,-0.41188288,-0.46225387,0.02290225,-0.30547047,-0.4821162,0.16012192,0.38117933,0.09050703,-0.19624546,-0.15609431,0.07042986,0.3148246,-0.05269588,-0.039140135,-0.27311864,-0.5313749,-0.07278303,-0.28564167,0.40633324,0.27438074,-0.33285016,0.48366016,-0.1868916,-0.11395642,0.41317356,0.6122248,-0.17725272,0.5885771,-0.043597978,-0.12985998,-0.48262614,0.036938548,-0.23215446,-0.4586741,0.40202367,0.39871365,0.40458053,0.11369836,0.047267616,-0.33472955,-0.0736922,0.0,0.0,0.0,-0.04239895,-0.048857134,-0.07255001,0.0,0.02166893,0.003860553,0.0,0.015568614,-0.12189758,0.1656887,0.56778526,0.2573384,-0.14126685,0.26964617,0.38049787,-0.36964574,0.5429429,0.4858694,0.5392759,0.33397192,-0.5292928,0.48138225,-0.3814337,-0.26645464,-0.22139981,0.0393188,0.540257,0.3732344,0.061119914,-0.40323785,-0.027448416,-0.09904677,-0.39385843,0.51572704,0.051013887,0.010567129,-0.45928824,-0.046225548,0.35471177,-0.11607221,0.4036979,0.04851145,0.31053594,-0.20114025,-0.06318814,-0.11971743,0.2558158,0.4767382,0.06389463,0.5359721,0.27281535,0.61154187,-0.17682181,-0.5467057,-0.15335092,0.16274224,-0.2988279,-0.21623209,0.47806942,0.51816785,-0.3264413,0.3658301,0.23505229,-0.064686,0.58192694,0.036728177,-0.19700703,-0.24694583,0.36191887,0.12063205,-0.07626569,-0.3799886,-0.45023346,0.45717847,0.10571009,-0.30130303,0.34269577,-0.20633999,0.0499897,-0.097061306,-0.4296894,-0.44272336,0.5295114,0.40523547,0.47777525,-0.47180068,0.43413532,0.14695245,-0.039705575,0.15221053,-0.10159143,0.1270639,0.17898011,-0.32885066,-0.5786,-0.023145985,0.24564582,0.2326225,-0.0007247329,0.21068501,-0.068891704,-0.2498591,0.38694972,0.25435388,-0.26001695,-0.53119427,0.42076278,-0.020152673,0.0,0.0,-0.04903647,-0.021485018,0.0063240416,0.0,-0.013520969,-0.04661106,0.0,0.25270316,-0.044974983,-0.515672,0.079448774,0.50788134,0.65939474,0.326761,-0.44779658,-0.6086799,-0.48577356,-0.47844335,-0.041437924,-0.6244541,0.6047946,0.60107666,-0.8273604,0.25618458,-0.1575329,0.027038105,-0.23821822,0.5200817,0.5768277,0.2281723,-0.57039213,-0.59204894,-0.4897523,-0.20118606,-0.10484761,-0.14021656,-0.38588452,0.3546,0.61131567,-0.4037295,0.7011073,-0.33956572,0.04620619,-0.32616884,-0.4394969,-0.49657133,-0.33803958,0.40583158,-0.35029602,-0.5258989,-0.026526408,0.27576658,-0.792013,-0.20139068,0.011485338,-0.31658253,0.2183519,-0.018916938,0.0050536706,-0.02281617,-0.038263872,0.0310839,0.56170845,-0.6282362,-0.5168994,-0.15849586,0.096899875,-0.060975116,0.33497098,0.17076254,0.3759598,-0.5072324,0.13570258,-0.1473247,-0.17493798,0.10895595,0.43225223,-0.5622761,0.22041798,0.25107282,-0.3827208,-0.3367378,-0.53930104,0.06395388,-0.21373653,-0.13711393,-0.17852244,-0.014904106,0.7355005,0.25485387,0.20877622,0.59275186,-0.28384012,0.39728564,0.021546245,-0.22174235,-0.5313238,0.29870403,-0.7480616,0.23096626,0.35752147,0.31776556,0.60854894,0.7437414,0.40992495,0.0069172373,-0.6218858,0.4920594,0.07133994,-0.070414774,0.6690848,0.041190106,0.016126594,-0.0058748773,-0.07512411,0.0,0.0,-0.005659065,-0.011941007,-0.006117512,-0.031855706,-0.040702112,0.648664,-0.41656962,0.22611614,0.07048929,0.38365042,0.43846026,-0.4582126,0.52142835,-0.41739795,0.20872425,-0.74500805,-0.5456883,0.29133123,0.0045635104,0.45645988,0.0218608,0.37450957,0.19543046,-0.2703051,0.37894905,0.3440333,0.42775798,0.06840312,-0.14772394,-0.13403201,0.49949837,0.16941537,-0.42480052,0.33693975,0.5180814,-0.23840593,0.34738067,-0.14095815,0.4771434,0.0059478283,0.3157413,-0.4141257,-0.32466415,0.30409428,0.073748946,0.30155033,-0.17202307,0.31254074,0.34113133,-0.4173333,-0.30333576,0.3580578,-0.058534212,0.42712164,0.46393025,0.19257312,0.91011685,0.17239583,-0.01824528,-0.12686616,-0.19433935,-0.3245527,0.43490216,0.22452417,0.1861319,-0.4840148,-0.01780321,0.18180817,0.38608533,-0.09568596,-0.057836026,0.31867123,0.5001768,-0.5310913,-0.23036578,-0.18935914,0.44626456,-0.014953927,-0.005733669,-0.4992405,0.40648514,0.236542,-0.47628355,-0.32074094,0.43714648,0.073094346,0.43527675,0.13248475,0.12132627,0.37790197,-0.17227016,-0.52738965,0.039165292,-0.16698352,0.4481608,-0.061499804,0.26578775,-0.3720556,0.3283339,0.43164974,0.27652317,0.059041668,0.36649668,0.30042675,0.5507893,0.031096091,-0.023072015,0.015341973,0.063868605,0.05314186,-0.10451103,0.012260199,-0.033602644,-0.007871839,-0.028260214,0.4560528,-0.43863538,-0.1972818,-0.54110587,-0.11297603,0.5834811,-0.3068129,0.16640697,0.15583868,0.306662,-0.1322146,-0.25152695,-0.36682713,-0.40586734,-0.52713156,0.08048719,-0.4596381,-0.16805714,0.22507417,0.01995802,0.41539112,0.12115909,0.61171275,0.17476349,-0.17620562,-0.38986272,-0.1986934,-0.07216763,-0.2522651,0.1745536,-0.00065242837,0.33300617,-0.16377176,0.47842458,0.1233035,-0.11198796,-0.5111505,0.44108307,-0.3224152,-0.34009638,-0.19228707,-0.30730093,0.25576028,-0.10244663,-0.31067827,0.37724394,0.49409118,0.0061814627,0.5397924,0.32008857,-0.30164802,-0.50917286,0.17394805,-0.0714896,-0.44997922,0.15607458,-0.53747565,-0.5079738,-0.0361138,0.21564847,-0.57721186,-0.90376776,0.52751344,0.44228637,-0.07307916,-0.33051163,0.03798145,-0.7166991,0.0744902,0.533621,-0.58328587,0.2642905,0.30252588,0.12714164,-0.34574488,0.023801422,-0.13283314,0.2592124,0.11557618,0.27972016,0.22628273,0.4573506,-0.03671455,0.5283449,0.016419219,-0.30363163,-0.51035285,0.22357996,-0.4086221,-0.15721984,0.47282434,-0.09929528,0.5269532,0.14871538,0.47924593,0.12536359,0.06255887,-0.4338604,-0.17016983,0.039393302,-0.021478916,0.0,-0.0011150183,-0.02002353,0.013970958,0.0,0.08725746,-0.043776356,0.14214514,0.026229413,-0.2595059,-0.12774545,-0.0494774,-0.12511805,0.4504645,-0.08772072,-0.73110783,0.125394,0.31506735,0.42245546,0.3609071,-0.2768759,0.36766338,-0.24215254,0.1554749,0.31662637,-0.4220921,0.14024962,0.53150356,-0.052198645,0.24542153,-0.27837205,0.301992,-0.30569372,0.24076378,-0.045823783,-0.43873274,0.102294445,0.28654665,0.004846038,0.00082837255,-0.2729205,-0.24653284,0.11174075,-0.07795748,0.24567664,-0.62129486,0.5075251,-0.5105555,0.5848545,0.38590983,-0.16161081,0.2442681,0.37855762,0.1243355,0.25341237,-0.23978654,0.18581568,-0.5839694,-0.06217745,0.018985085,-0.0029155314,-0.11399212,0.34180018,0.38483477,0.06241387,-0.28890932,0.11825153,-0.3466623,0.17485446,0.20287298,0.3890488,-0.036215372,0.46085256,0.45194423,0.42120856,-0.021849155,0.019964645,0.087934755,-0.08417687,0.2719986,0.105430365,-0.38356945,0.23822773,0.23885334,0.3386371,0.09151632,0.3015638,0.5727032,0.07485627,0.48018882,0.08769888,-0.04850754,-0.36953154,0.1649228,-0.015656859,0.30176848,0.2974766,0.5414424,-0.2573507,-0.0125634745,0.25059485,0.0073877983,0.32782456,0.39748195,-0.09214687,0.08788801,0.24517,0.113038145,-0.12556338,0.14891444,-0.3637699,0.16135764,-0.24549964,-0.048727535,-0.4137956,-0.064132504,0.6118638,-0.39429182,-0.08805484,-0.18773945,0.2982645,0.11784611,-0.25582108,-0.112161316,0.05399874,-0.3052031,0.4420171,-0.3254955,0.26785895,-0.41021463,0.2770481,0.4295652,0.01817906,0.16657665,-0.093443215,-0.3001354,-0.18076026,-0.14202349,0.17395072,-0.115156375,-0.09231439,0.49168733,-0.006198864,-0.27805942,-0.28996944,-0.03537516,-0.21342821,0.054626282,0.1938549,-0.08305472,-0.106129885,0.6057189,-0.08438851,-0.18504211,0.12727177,0.17185001,-0.4829378,0.1772602,0.071630456,-0.11114428,0.41013658,0.26588863,-0.067258045,-0.40872657,-0.32674155,0.24508859,-0.29301828,0.24470176,0.36417535,-0.1254141,-0.3829799,0.3146924,-0.07486214,-0.22775005,-0.41284937,0.38637522,-0.40476888,0.16482165,0.23975624,-0.33793283,0.3607992,0.049563147,-0.07752391,-0.07130672,-0.43954402,0.35074002,-0.267593,0.007313381,0.41151854,-0.33716315,-0.35077953,0.11318766,-0.3380483,0.20592208,0.035967678,0.39766645,-0.21563718,-0.1851213,0.22164433,-0.31974375,-0.4119708,0.09578852,-0.05242302,0.23938423,-0.23844309,0.42013696,-0.14793545,-0.2336527,0.19472612,-0.12992854,0.32164264,0.09721068,0.4162817,0.016214421,0.25102162,0.4798254,-0.012202531,-0.17921817,0.1839505,0.12687603,0.1467754,0.11232976,0.15392108,0.09507806,0.0960064,0.054173872,0.10056898,0.08604917,0.12875709,0.2974497,0.13084707,0.03666326,0.001766446,-0.039353047,-0.016559495,-0.014885214,0.016923485,0.020065885,0.03429328,0.04688359];
+const BEST_AUTOENCODER_21_10_10_10_5: [fxx; 1006] = [0.45737186,-0.17592742,0.41990036,0.3023682,0.46085286,0.09734252,0.20202918,0.18677261,0.15259826,0.08691186,0.16731122,0.10409911,-0.27700168,-0.013539409,-0.09711216,0.14397214,-0.15910262,0.21080758,0.43845347,0.07938459,0.47766662,0.49709564,0.5581285,0.5085441,0.37938422,0.13941869,-0.011706705,0.111483075,-0.3481085,-0.17621183,-0.16999112,0.33578566,0.33830214,0.3392177,0.46204475,0.43641356,0.02911971,-0.24209979,-0.13739654,0.07810422,-0.42370325,0.048519064,0.47701773,0.36765498,0.25073645,0.34227213,0.28530744,0.12449606,0.33620736,0.4206451,0.37811056,0.48892096,0.31235722,-0.019208623,0.28711075,-0.32138065,-0.48255187,-0.073856294,0.21494687,0.2527926,0.25357565,0.06038692,0.21669765,-0.4017394,0.0030092,0.027453631,-0.008625239,-0.12991595,-0.3729226,0.27464026,-0.35417527,-0.32996136,-0.3039164,-0.41292477,-0.008672744,-0.16740495,0.27102596,-0.25378257,-0.09404045,-0.34924185,0.4185815,-0.19595659,0.06775886,-0.40013322,0.0044076815,0.22488806,0.038864266,-0.38992977,-0.3962791,-0.008726857,-0.08023614,0.045806993,0.23833953,0.5205801,0.768315,0.30037403,-0.008285542,0.13156843,0.016080525,-0.41769928,-0.5351447,-0.2394889,0.4227838,0.29043153,0.3176221,-0.42664915,-0.20242606,-0.25436103,-0.005583709,0.16876525,0.41205645,-0.28080022,0.10476436,-0.31362674,-0.2677709,-0.42060456,-0.3070178,0.15683068,0.42874318,0.22397202,0.3479392,-0.08452995,0.15452468,0.3514351,-0.01399497,-0.40478998,-0.2482755,-0.1356977,-0.2107391,0.1617366,-0.24560514,-0.09844121,-0.05664088,0.016249405,-0.20677516,-0.057893697,-0.3120921,0.14034316,0.19313832,0.2763481,0.3531536,0.56920975,0.5262653,0.38728634,-0.030576818,0.6514924,-0.10670456,-0.069721915,0.25045338,-0.14655343,0.35060158,-0.10266501,0.63437945,0.32942742,0.45425716,0.074557275,0.39037,0.0637424,-0.17551796,-0.20605043,0.3715435,0.44256073,-0.0024101275,-0.19201526,-0.24129438,0.39782032,0.5097004,0.1726135,-0.3583182,-0.23892967,0.28712755,-0.21878761,0.21266371,-0.3139548,0.2520895,0.20426053,-0.38272342,-0.13531768,-0.37770674,-0.07767549,-0.079563916,0.076762915,-0.09228301,-0.15359625,0.39501822,-0.32253093,-0.05489093,-0.10004258,0.043926954,-0.21595538,0.42019904,-0.19991599,-0.2796001,-0.3063535,-0.1659193,0.11443508,-0.28578854,0.07319701,-0.2500814,-0.015817225,0.39411527,-0.14725995,0.39196688,-0.25877836,-0.04152623,-0.095975876,-0.15781116,0.028069556,-0.14534119,0.019865453,-0.06348205,-0.038866445,-0.12543958,0.0,-0.049645416,-0.008875614,-0.34252134,-0.02051096,0.0,0.0,0.027617633,0.20035297,-0.35912716,0.33826768,0.24858415,0.13768375,-0.03795594,-0.09491876,-0.5105505,-0.2659443,-0.45389396,0.11748606,0.09288216,0.32547277,-0.030020177,0.24329084,0.08851558,-0.42366457,-0.26695818,0.101017475,-0.49297047,0.36307758,-0.34514493,0.2988848,0.035871148,0.5472412,0.50963855,-0.45673212,0.40956378,-0.1742078,0.31611833,0.5084936,0.40096274,-0.1617916,0.42529443,0.28289756,0.31026813,0.1375107,0.032167792,-0.39572728,0.28746232,-0.04957891,0.20623049,0.15467656,-0.4147029,-0.11097115,0.8231028,0.20070969,0.4504164,-0.1172778,0.43438476,-0.3721964,0.4799559,0.5127816,0.22977056,0.5342281,-0.49618167,0.48291194,-0.54680806,-0.41188288,-0.46225387,0.02290225,-0.30547047,-0.4821162,0.16012192,0.38117933,0.09050703,-0.19624546,-0.15609431,0.07042986,0.3148246,-0.05269588,-0.039140135,-0.27311864,-0.5313749,-0.07278303,-0.28564167,0.40633324,0.27438074,-0.33285016,0.48366016,-0.1868916,-0.11395642,0.41317356,0.6122248,-0.17725272,0.5885771,-0.043597978,-0.12985998,-0.48262614,0.036938548,-0.23215446,-0.4586741,0.40202367,0.39871365,0.40458053,0.11369836,0.047267616,-0.33472955,-0.0736922,0.0,0.0,0.0,-0.04239895,-0.048857134,-0.07255001,0.0,0.02166893,0.003860553,0.0,0.015568614,-0.12189758,0.1656887,0.56778526,0.2573384,-0.14126685,0.26964617,0.38049787,-0.36964574,0.5429429,0.4858694,0.5392759,0.33397192,-0.5292928,0.48138225,-0.3814337,-0.26645464,-0.22139981,0.0393188,0.540257,0.3732344,0.061119914,-0.40323785,-0.027448416,-0.09904677,-0.39385843,0.51572704,0.051013887,0.010567129,-0.45928824,-0.046225548,0.35471177,-0.11607221,0.4036979,0.04851145,0.31053594,-0.20114025,-0.06318814,-0.11971743,0.2558158,0.4767382,0.06389463,0.5359721,0.27281535,0.61154187,-0.17682181,-0.5467057,-0.15335092,0.16274224,-0.2988279,-0.21623209,0.47806942,0.51816785,-0.3264413,0.3658301,0.23505229,-0.064686,0.58192694,0.036728177,-0.19700703,-0.24694583,0.36191887,0.12063205,-0.07626569,-0.3799886,-0.45023346,0.45717847,0.10571009,-0.30130303,0.34269577,-0.20633999,0.0499897,-0.097061306,-0.4296894,-0.44272336,0.5295114,0.40523547,0.47777525,-0.47180068,0.43413532,0.14695245,-0.039705575,0.15221053,-0.10159143,0.1270639,0.17898011,-0.32885066,-0.5786,-0.023145985,0.24564582,0.2326225,-0.0007247329,0.21068501,-0.068891704,-0.2498591,0.38694972,0.25435388,-0.26001695,-0.53119427,0.42076278,-0.020152673,0.0,0.0,-0.04903647,-0.021485018,0.0063240416,0.0,-0.013520969,-0.04661106,0.0,0.25270316,-0.044974983,-0.515672,0.079448774,0.50788134,0.65939474,0.326761,-0.44779658,-0.6086799,-0.48577356,-0.47844335,-0.041437924,-0.6244541,0.6047946,0.60107666,-0.8273604,0.25618458,-0.1575329,0.027038105,-0.23821822,0.5200817,0.5768277,0.2281723,-0.57039213,-0.59204894,-0.4897523,-0.20118606,-0.10484761,-0.14021656,-0.38588452,0.3546,0.61131567,-0.4037295,0.7011073,-0.33956572,0.04620619,-0.32616884,-0.4394969,-0.49657133,-0.33803958,0.40583158,-0.35029602,-0.5258989,-0.026526408,0.27576658,-0.792013,-0.20139068,0.011485338,-0.31658253,0.2183519,-0.018916938,0.0050536706,-0.02281617,-0.038263872,0.0310839,0.56170845,-0.6282362,-0.5168994,-0.15849586,0.096899875,-0.060975116,0.33497098,0.17076254,0.3759598,-0.5072324,0.13570258,-0.1473247,-0.17493798,0.10895595,0.43225223,-0.5622761,0.22041798,0.25107282,-0.3827208,-0.3367378,-0.53930104,0.06395388,-0.21373653,-0.13711393,-0.17852244,-0.014904106,0.7355005,0.25485387,0.20877622,0.59275186,-0.28384012,0.39728564,0.021546245,-0.22174235,-0.5313238,0.29870403,-0.7480616,0.23096626,0.35752147,0.31776556,0.60854894,0.7437414,0.40992495,0.0069172373,-0.6218858,0.4920594,0.07133994,-0.070414774,0.6690848,0.041190106,0.016126594,-0.0058748773,-0.07512411,0.0,0.0,-0.005659065,-0.011941007,-0.006117512,-0.031855706,-0.040702112,0.648664,-0.41656962,0.22611614,0.07048929,0.38365042,0.43846026,-0.4582126,0.52142835,-0.41739795,0.20872425,-0.74500805,-0.5456883,0.29133123,0.0045635104,0.45645988,0.0218608,0.37450957,0.19543046,-0.2703051,0.37894905,0.3440333,0.42775798,0.06840312,-0.14772394,-0.13403201,0.49949837,0.16941537,-0.42480052,0.33693975,0.5180814,-0.23840593,0.34738067,-0.14095815,0.4771434,0.0059478283,0.3157413,-0.4141257,-0.32466415,0.30409428,0.073748946,0.30155033,-0.17202307,0.31254074,0.34113133,-0.4173333,-0.30333576,0.3580578,-0.058534212,0.42712164,0.46393025,0.19257312,0.91011685,0.17239583,-0.01824528,-0.12686616,-0.19433935,-0.3245527,0.43490216,0.22452417,0.1861319,-0.4840148,-0.01780321,0.18180817,0.38608533,-0.09568596,-0.057836026,0.31867123,0.5001768,-0.5310913,-0.23036578,-0.18935914,0.44626456,-0.014953927,-0.005733669,-0.4992405,0.40648514,0.236542,-0.47628355,-0.32074094,0.43714648,0.073094346,0.43527675,0.13248475,0.12132627,0.37790197,-0.17227016,-0.52738965,0.039165292,-0.16698352,0.4481608,-0.061499804,0.26578775,-0.3720556,0.3283339,0.43164974,0.27652317,0.059041668,0.36649668,0.30042675,0.5507893,0.031096091,-0.023072015,0.015341973,0.063868605,0.05314186,-0.10451103,0.012260199,-0.033602644,-0.007871839,-0.028260214,0.4560528,-0.43863538,-0.1972818,-0.54110587,-0.11297603,0.5834811,-0.3068129,0.16640697,0.15583868,0.306662,-0.1322146,-0.25152695,-0.36682713,-0.40586734,-0.52713156,0.08048719,-0.4596381,-0.16805714,0.22507417,0.01995802,0.41539112,0.12115909,0.61171275,0.17476349,-0.17620562,-0.38986272,-0.1986934,-0.07216763,-0.2522651,0.1745536,-0.00065242837,0.33300617,-0.16377176,0.47842458,0.1233035,-0.11198796,-0.5111505,0.44108307,-0.3224152,-0.34009638,-0.19228707,-0.30730093,0.25576028,-0.10244663,-0.31067827,0.37724394,0.49409118,0.0061814627,0.5397924,0.32008857,-0.30164802,-0.50917286,0.17394805,-0.0714896,-0.44997922,0.15607458,-0.53747565,-0.5079738,-0.0361138,0.21564847,-0.57721186,-0.90376776,0.52751344,0.44228637,-0.07307916,-0.33051163,0.03798145,-0.7166991,0.0744902,0.533621,-0.58328587,0.2642905,0.30252588,0.12714164,-0.34574488,0.023801422,-0.13283314,0.2592124,0.11557618,0.27972016,0.22628273,0.4573506,-0.03671455,0.5283449,0.016419219,-0.30363163,-0.51035285,0.22357996,-0.4086221,-0.15721984,0.47282434,-0.09929528,0.5269532,0.14871538,0.47924593,0.12536359,0.06255887,-0.4338604,-0.17016983,0.039393302,-0.021478916,0.0,-0.0011150183,-0.02002353,0.013970958,0.0,0.08725746,-0.043776356,0.14214514,0.026229413,-0.2595059,-0.12774545,-0.0494774,-0.12511805,0.4504645,-0.08772072,-0.73110783,0.125394,0.31506735,0.42245546,0.3609071,-0.2768759,0.36766338,-0.24215254,0.1554749,0.31662637,-0.4220921,0.14024962,0.53150356,-0.052198645,0.24542153,-0.27837205,0.301992,-0.30569372,0.24076378,-0.045823783,-0.43873274,0.102294445,0.28654665,0.004846038,0.00082837255,-0.2729205,-0.24653284,0.11174075,-0.07795748,0.24567664,-0.62129486,0.5075251,-0.5105555,0.5848545,0.38590983,-0.16161081,0.2442681,0.37855762,0.1243355,0.25341237,-0.23978654,0.18581568,-0.5839694,-0.06217745,0.018985085,-0.0029155314,-0.11399212,0.34180018,0.38483477,0.06241387,-0.28890932,0.11825153,-0.3466623,0.17485446,0.20287298,0.3890488,-0.036215372,0.46085256,0.45194423,0.42120856,-0.021849155,0.019964645,0.087934755,-0.08417687,0.2719986,0.105430365,-0.38356945,0.23822773,0.23885334,0.3386371,0.09151632,0.3015638,0.5727032,0.07485627,0.48018882,0.08769888,-0.04850754,-0.36953154,0.1649228,-0.015656859,0.30176848,0.2974766,0.5414424,-0.2573507,-0.0125634745,0.25059485,0.0073877983,0.32782456,0.39748195,-0.09214687,0.08788801,0.24517,0.113038145,-0.12556338,0.14891444,-0.3637699,0.16135764,-0.24549964,-0.048727535,-0.4137956,-0.064132504,0.6118638,-0.39429182,-0.08805484,-0.18773945,0.2982645,0.11784611,-0.25582108,-0.112161316,0.05399874,-0.3052031,0.4420171,-0.3254955,0.26785895,-0.41021463,0.2770481,0.4295652,0.01817906,0.16657665,-0.093443215,-0.3001354,-0.18076026,-0.14202349,0.17395072,-0.115156375,-0.09231439,0.49168733,-0.006198864,-0.27805942,-0.28996944,-0.03537516,-0.21342821,0.054626282,0.1938549,-0.08305472,-0.106129885,0.6057189,-0.08438851,-0.18504211,0.12727177,0.17185001,-0.4829378,0.1772602,0.071630456,-0.11114428,0.41013658,0.26588863,-0.067258045,-0.40872657,-0.32674155,0.24508859,-0.29301828,0.24470176,0.36417535,-0.1254141,-0.3829799,0.3146924,-0.07486214,-0.22775005,-0.41284937,0.38637522,-0.40476888,0.16482165,0.23975624,-0.33793283,0.3607992,0.049563147,-0.07752391,-0.07130672,-0.43954402,0.35074002,-0.267593,0.007313381,0.41151854,-0.33716315,-0.35077953,0.11318766,-0.3380483,0.20592208,0.035967678,0.39766645,-0.21563718,-0.1851213,0.22164433,-0.31974375,-0.4119708,0.09578852,-0.05242302,0.23938423,-0.23844309,0.42013696,-0.14793545,-0.2336527,0.19472612,-0.12992854,0.32164264,0.09721068,0.4162817,0.016214421,0.25102162,0.4798254,-0.012202531,-0.17921817,0.1839505,0.12687603,0.1467754,0.11232976,0.15392108,0.09507806,0.0960064,0.054173872,0.10056898,0.08604917,0.12875709,0.2974497,0.13084707,0.03666326,0.001766446,-0.039353047,-0.016559495,-0.014885214,0.016923485,0.020065885,0.03429328,0.04688359];
 
 pub struct NnProcessor {
     params: NnParameters,
-    input_values: Vec<f32>,
-    next_values: Vec<f32>,
-    prev_output: Vec<f32>,
-    prev_dirs: Vec<Option<f32>>,
+    input_values: Vec<fxx>,
+    next_values: Vec<fxx>,
+    prev_output: Vec<fxx>,
+    prev_dirs: Vec<Option<fxx>>,
     nn: NeuralNetwork,
-    simple_physics: f32,
+    simple_physics: fxx,
 
     calc_counts: usize,
 
-    output_diff_loss: f32,
-    output_regularization_loss: f32,
+    output_diff_loss: fxx,
+    output_regularization_loss: fxx,
 
     current_track: usize,
 
@@ -1491,7 +1496,7 @@ pub struct SimulationVars<'a> {
     car: &'a Car,
     walls: &'a [Wall],
     params_phys: &'a PhysicsParameters,
-    dirs: &'a [Pos2],
+    dirs: &'a [Vecx2],
 }
 
 pub const POSSIBLE_ACTIONS: [CarInput; 9] = [
@@ -1552,7 +1557,7 @@ pub const POSSIBLE_ACTIONS: [CarInput; 9] = [
 ];
 
 impl NnProcessor {
-    pub fn new_zeros(nn_params: NnParameters, simple_physics: f32, current_track: usize) -> Self {
+    pub fn new_zeros(nn_params: NnParameters, simple_physics: fxx, current_track: usize) -> Self {
         Self {
             input_values: vec![0.; nn_params.get_total_input_neurons()],
             next_values: vec![0.; nn_params.pass_next_size],
@@ -1570,9 +1575,9 @@ impl NnProcessor {
     }
 
     pub fn new(
-        params: &[f32],
+        params: &[fxx],
         nn_params: NnParameters,
-        simple_physics: f32,
+        simple_physics: fxx,
         current_track: usize,
     ) -> Self {
         assert_eq!(params.len(), nn_params.get_nns_len());
@@ -1600,15 +1605,16 @@ impl NnProcessor {
 
     pub fn calc_input_vector(
         &mut self,
-        time_passed: f32,
-        distance_percent: f32,
-        dpenalty: f32,
-        dirs: &[Option<f32>],
-        dirs_second_layer: &[Option<f32>],
-        current_segment_f32: f32,
+        time_passed: fxx,
+        distance_percent: fxx,
+        dpenalty: fxx,
+        dirs: &[Option<fxx>],
+        dirs_second_layer: &[Option<fxx>],
+        current_segment_fxx: fxx,
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
-    ) -> &[f32] {
+        params_phys: &PhysicsParameters,
+    ) -> &[fxx] {
         let mut input_values_iter = self.input_values.iter_mut();
 
         if self.params.pass_time {
@@ -1655,7 +1661,7 @@ impl NnProcessor {
         }
 
         if self.params.pass_internals {
-            for y in &internals.to_f32() {
+            for y in &internals.to_fxx() {
                 *input_values_iter.next().unwrap() = *y;
             }
         }
@@ -1678,7 +1684,7 @@ impl NnProcessor {
 
         if self.params.pass_current_track {
             for i in 0..self.params.max_tracks {
-                *input_values_iter.next().unwrap() = (i == self.current_track) as usize as f32;
+                *input_values_iter.next().unwrap() = (i == self.current_track) as usize as fxx;
             }
         }
 
@@ -1686,8 +1692,8 @@ impl NnProcessor {
             for track in 0..self.params.max_tracks {
                 for i in 0..self.params.max_segments {
                     *input_values_iter.next().unwrap() = if track == self.current_track {
-                        if i as f32 <= current_segment_f32 && current_segment_f32 < (i + 1) as f32 {
-                            1. + (current_segment_f32 - i as f32)
+                        if i as fxx <= current_segment_fxx && current_segment_fxx < (i + 1) as fxx {
+                            1. + (current_segment_fxx - i as fxx)
                         } else {
                             0.
                         }
@@ -1698,6 +1704,13 @@ impl NnProcessor {
             }
         }
 
+        if self.params.pass_current_physics {
+            *input_values_iter.next().unwrap() = params_phys.traction_coefficient;
+            *input_values_iter.next().unwrap() = params_phys.friction_coefficient;
+            *input_values_iter.next().unwrap() = params_phys.acceleration_ratio;
+            *input_values_iter.next().unwrap() = params_phys.simple_physics_ratio;
+        }
+
         assert!(input_values_iter.next().is_none());
 
         &self.input_values
@@ -1705,12 +1718,12 @@ impl NnProcessor {
 
     pub fn process(
         &mut self,
-        time_passed: f32,
-        distance_percent: f32,
-        dpenalty: f32,
-        dirs: &[Option<f32>],
-        dirs_second_layer: &[Option<f32>],
-        current_segment_f32: f32,
+        time_passed: fxx,
+        distance_percent: fxx,
+        dpenalty: fxx,
+        dirs: &[Option<fxx>],
+        dirs_second_layer: &[Option<fxx>],
+        current_segment_fxx: fxx,
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
         simulation_vars: SimulationVars,
@@ -1726,7 +1739,7 @@ impl NnProcessor {
                             convert_dir(&self.params, *intersection);
                     }
 
-                    for y in &internals.to_f32() {
+                    for y in &internals.to_fxx() {
                         *input_values_iter.next().unwrap() = *y;
                     }
 
@@ -1748,7 +1761,7 @@ impl NnProcessor {
                         car.process_input(action, params_phys);
 
                         for i in 0..params_phys.steps_per_time {
-                            let time = params_phys.time / params_phys.steps_per_time as f32;
+                            let time = params_phys.time / params_phys.steps_per_time as fxx;
                             car.apply_wheels_force(&mut |_, _, _| {}, params_phys);
                             for wall in *walls {
                                 car.process_collision(wall, params_phys);
@@ -1771,7 +1784,7 @@ impl NnProcessor {
                                     - convert_dir(&self.params, *dir);
                         }
 
-                        for y in &car.get_internal_values().to_f32() {
+                        for y in &car.get_internal_values().to_fxx() {
                             *input_values_iter.next().unwrap() = *y;
                         }
                     }
@@ -1811,9 +1824,10 @@ impl NnProcessor {
             dpenalty,
             dirs,
             dirs_second_layer,
-            current_segment_f32,
+            current_segment_fxx,
             internals,
             params_sim,
+            simulation_vars.params_phys,
         );
         let values = self.nn.calc(&self.input_values);
 
@@ -1831,11 +1845,11 @@ impl NnProcessor {
             let prev_output_len = self.prev_output.len();
             for y in &mut self.prev_output {
                 let new_value = *output_values_iter.next().unwrap();
-                self.output_diff_loss += (*y - new_value).abs() / prev_output_len as f32;
+                self.output_diff_loss += (*y - new_value).abs() / prev_output_len as fxx;
                 *y = new_value;
                 if new_value.abs() > 10. {
                     self.output_regularization_loss +=
-                        (new_value.abs() - 10.) / prev_output_len as f32;
+                        (new_value.abs() - 10.) / prev_output_len as fxx;
                 }
             }
 
@@ -1858,31 +1872,31 @@ impl NnProcessor {
                 }
             }
 
-            CarInput::from_f32(&values[0..NnParameters::CAR_OUTPUT_SIZE])
+            CarInput::from_fxx(&values[0..NnParameters::CAR_OUTPUT_SIZE])
         }
     }
 
-    pub fn get_autoencoder_loss(&self) -> f32 {
+    pub fn get_autoencoder_loss(&self) -> fxx {
         self.nn_autoencoder.get_autoencoder_loss()
     }
 
-    pub fn get_regularization_loss(&self) -> f32 {
+    pub fn get_regularization_loss(&self) -> fxx {
         self.nn.get_regularization() + self.nn_autoencoder.get_regularization_loss()
     }
 
-    pub fn get_output_diff_loss(&self) -> f32 {
+    pub fn get_output_diff_loss(&self) -> fxx {
         if self.calc_counts == 0 {
             0.
         } else {
-            self.output_diff_loss / self.calc_counts as f32
+            self.output_diff_loss / self.calc_counts as fxx
         }
     }
 
-    pub fn get_output_regularization_loss(&self) -> f32 {
+    pub fn get_output_regularization_loss(&self) -> fxx {
         if self.calc_counts == 0 {
             0.
         } else {
-            self.output_regularization_loss / self.calc_counts as f32
+            self.output_regularization_loss / self.calc_counts as fxx
         }
     }
 
@@ -1902,9 +1916,9 @@ impl NnProcessor {
 }
 
 fn update_two_nearest(
-    current: (Option<f32>, Option<f32>),
-    new_value: Option<f32>,
-) -> (Option<f32>, Option<f32>) {
+    current: (Option<fxx>, Option<fxx>),
+    new_value: Option<fxx>,
+) -> (Option<fxx>, Option<fxx>) {
     if let Some(dist) = new_value {
         match current {
             (None, None) => (Some(dist), None),
@@ -1933,13 +1947,13 @@ fn update_two_nearest(
 
 pub struct CarSimulation {
     pub car: Car,
-    pub penalty: f32,
-    prev_penalty: f32,
-    pub reward: f32,
-    pub time_passed: f32,
-    pub dirs: Vec<Pos2>,
-    dirs_values: Vec<Option<f32>>,
-    dirs_values_second_layer: Vec<Option<f32>>,
+    pub penalty: fxx,
+    prev_penalty: fxx,
+    pub reward: fxx,
+    pub time_passed: fxx,
+    pub dirs: Vec<Vecx2>,
+    dirs_values: Vec<Option<fxx>>,
+    dirs_values_second_layer: Vec<Option<fxx>>,
     pub walls: Vec<Wall>,
     pub reward_path_processor: RewardPathProcessor,
 }
@@ -1959,11 +1973,11 @@ impl CarSimulation {
             time_passed: 0.,
             dirs: (0..params.nn.dirs_size)
                 .map(|i| {
-                    (i as f32 / (params.nn.dirs_size - 1) as f32 - 0.5)
-                        * TAU
+                    (i as fxx / (params.nn.dirs_size - 1) as fxx - 0.5)
+                        * TAUx
                         * params.nn.view_angle_ratio
                 })
-                .map(|t| rotate_around_origin(pos2(1., 0.), t))
+                .map(|t| rotate_around_origin(vecx2(1., 0.), t))
                 .collect(),
             dirs_values: (0..params.nn.dirs_size).map(|_| None).collect(),
             dirs_values_second_layer: (0..params.nn.dirs_size).map(|_| None).collect(),
@@ -1989,18 +2003,18 @@ impl CarSimulation {
         &mut self,
         params_phys: &PhysicsParameters,
         params_sim: &SimulationParameters,
-        observe_distance: &mut impl FnMut(Pos2, Pos2, f32, Option<f32>),
+        observe_distance: &mut impl FnMut(Vecx2, Vecx2, fxx, Option<fxx>),
         get_input: &mut impl FnMut(
-            f32,
-            f32,
-            f32,
-            &[Option<f32>],
-            &[Option<f32>],
+            fxx,
+            fxx,
+            fxx,
+            &[Option<fxx>],
+            &[Option<fxx>],
             &InternalCarValues,
-            f32,
+            fxx,
             SimulationVars,
         ) -> CarInput,
-        drift_observer: &mut impl FnMut(usize, Vec2, f32),
+        drift_observer: &mut impl FnMut(usize, Vecx2, fxx),
         observe_car_forces: &mut impl FnMut(&Car),
     ) -> bool {
         for ((dir, value), value_second_layer) in self
@@ -2030,7 +2044,7 @@ impl CarSimulation {
             &self.dirs_values,
             &self.dirs_values_second_layer,
             &self.car.get_internal_values(),
-            self.reward_path_processor.get_current_segment_f32(),
+            self.reward_path_processor.get_current_segment_fxx(),
             SimulationVars {
                 car: &self.car,
                 walls: &self.walls,
@@ -2047,7 +2061,7 @@ impl CarSimulation {
         self.prev_penalty = self.penalty;
 
         for i in 0..params_phys.steps_per_time {
-            let time = params_phys.time / params_phys.steps_per_time as f32;
+            let time = params_phys.time / params_phys.steps_per_time as fxx;
 
             self.car.apply_wheels_force(drift_observer, params_phys);
 
@@ -2087,7 +2101,7 @@ impl CarSimulation {
             painter.add(Shape::closed_line(
                 wall.get_points()
                     .into_iter()
-                    .map(|p| to_screen.transform_pos(p))
+                    .map(|p| to_screen.transform_pos(p.into()))
                     .collect(),
                 Stroke::new(1.0, Color32::from_rgb(0, 0, 0)),
             ));
@@ -2101,17 +2115,17 @@ impl CarSimulation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrackEvaluation {
     name: String,
-    penalty: f32,
-    reward: f32,
-    early_finish_percent: f32,
-    distance_percent: f32,
+    penalty: fxx,
+    reward: fxx,
+    early_finish_percent: fxx,
+    distance_percent: fxx,
     all_acquired: bool,
-    simple_physics: f32,
-    simple_physics_raw: f32,
-    autoencoder_loss: f32,
-    regularization_loss: f32,
-    output_diff_loss: f32,
-    output_regularization_loss: f32,
+    simple_physics: fxx,
+    simple_physics_raw: fxx,
+    autoencoder_loss: fxx,
+    regularization_loss: fxx,
+    output_diff_loss: fxx,
+    output_regularization_loss: fxx,
 }
 
 impl std::fmt::Display for TrackEvaluation {
@@ -2143,14 +2157,14 @@ pub fn sum_evals(
     evals: &[TrackEvaluation],
     params: &SimulationParameters,
     ignore_ignored: bool,
-) -> f32 {
+) -> fxx {
     let evals = evals
         .iter()
         .filter(|x| !x.name.ends_with("_ignore"))
         .collect::<Vec<_>>();
     if params.rewards_second_way {
         let all_acquired = evals.iter().all(|x| x.all_acquired);
-        let len = evals.len() as f32;
+        let len = evals.len() as fxx;
         let hard_physics_reward = if all_acquired {
             0.01 + (1.0 - evals[0].simple_physics)
         } else {
@@ -2165,35 +2179,35 @@ pub fn sum_evals(
         };
         let tracks_sum = evals
             .iter()
-            .map(|x| x.all_acquired as usize as f32)
-            .sum::<f32>();
-        // let regularization_sum = evals.iter().map(|x| x.regularization_loss).sum::<f32>();
+            .map(|x| x.all_acquired as usize as fxx)
+            .sum::<fxx>();
+        // let regularization_sum = evals.iter().map(|x| x.regularization_loss).sum::<fxx>();
         let regularization_sum = evals
             .iter()
             .map(|x| x.output_regularization_loss)
-            .sum::<f32>()
-            / evals.len() as f32;
+            .sum::<fxx>()
+            / evals.len() as fxx;
         let penalty_level_1 = evals
             .iter()
-            .map(|x| (x.penalty < 15.) as usize as f32)
-            .sum::<f32>();
+            .map(|x| (x.penalty < 15.) as usize as fxx)
+            .sum::<fxx>();
         let penalty_level_2 = evals
             .iter()
-            .map(|x| (x.penalty < 5.) as usize as f32)
-            .sum::<f32>();
+            .map(|x| (x.penalty < 5.) as usize as fxx)
+            .sum::<fxx>();
         let penalty_level_3 = evals
             .iter()
-            .map(|x| (x.penalty < 2.) as usize as f32)
-            .sum::<f32>();
+            .map(|x| (x.penalty < 2.) as usize as fxx)
+            .sum::<fxx>();
         let penalty_level_4 = evals
             .iter()
-            .map(|x| (x.penalty == 0.) as usize as f32)
-            .sum::<f32>();
+            .map(|x| (x.penalty == 0.) as usize as fxx)
+            .sum::<fxx>();
         let penalty_levels_len = 4. * len;
         let penalty_levels =
             (penalty_level_1 + penalty_level_2 + penalty_level_3 + penalty_level_4)
                 / penalty_levels_len;
-        let smooth_metrics = evals.iter().map(|x| x.to_f32_second_way()).sum::<f32>();
+        let smooth_metrics = evals.iter().map(|x| x.to_fxx_second_way()).sum::<fxx>();
         return (tracks_sum
             + if params.rewards_second_way_penalty {
                 penalty_levels + smooth_metrics / penalty_levels_len
@@ -2212,15 +2226,15 @@ pub fn sum_evals(
             })
             / len;
     } else if params.rewards_early_finish_zero_penalty {
-        let len = evals.len() as f32;
+        let len = evals.len() as fxx;
         let tracks_sum = evals
             .iter()
-            .map(|x| x.all_acquired as usize as f32 + x.distance_percent)
-            .sum::<f32>();
+            .map(|x| x.all_acquired as usize as fxx + x.distance_percent)
+            .sum::<fxx>();
         let penalty_sum = evals
             .iter()
-            .map(|x| (x.penalty == 0.) as usize as f32 + 1. / (1. + x.penalty))
-            .sum::<f32>();
+            .map(|x| (x.penalty == 0.) as usize as fxx + 1. / (1. + x.penalty))
+            .sum::<fxx>();
         let early_finish_reward = evals
             .iter()
             .map(|x| {
@@ -2230,7 +2244,7 @@ pub fn sum_evals(
                     0.
                 }
             })
-            .sum::<f32>();
+            .sum::<fxx>();
         (tracks_sum + penalty_sum + early_finish_reward) / len
     } else {
         evals
@@ -2251,13 +2265,13 @@ pub fn sum_evals(
                         output_diff_loss: 0.,
                         output_regularization_loss: 0.,
                     }
-                    .to_f32(params)
+                    .to_fxx(params)
                 } else {
-                    x.to_f32(params)
+                    x.to_fxx(params)
                 }
             })
-            .sum::<f32>()
-            / evals.len() as f32
+            .sum::<fxx>()
+            / evals.len() as fxx
             + if params.eval_add_min_distance {
                 evals
                     .iter()
@@ -2277,7 +2291,7 @@ pub fn sum_evals(
 }
 
 impl TrackEvaluation {
-    fn to_f32(&self, params: &SimulationParameters) -> f32 {
+    fn to_fxx(&self, params: &SimulationParameters) -> fxx {
         0. + self.reward * params.eval_reward.value
             + self.early_finish_percent * params.eval_early_finish.value
             + self.distance_percent * params.eval_distance.value
@@ -2285,7 +2299,7 @@ impl TrackEvaluation {
     }
 
     // from 0 to 1
-    fn to_f32_second_way(&self) -> f32 {
+    fn to_fxx_second_way(&self) -> fxx {
         (1. / (1. + self.penalty)
             // + (1. - 1. / (1. + self.reward))
             + self.early_finish_percent
@@ -2295,7 +2309,7 @@ impl TrackEvaluation {
     }
 }
 
-pub fn patch_params_sim(params: &[f32], params_sim: &SimulationParameters) -> SimulationParameters {
+pub fn patch_params_sim(params: &[fxx], params_sim: &SimulationParameters) -> SimulationParameters {
     let nn_len = params_sim.nn.get_nns_len();
     let (_, other_params) = params.split_at(nn_len);
     assert_eq!(other_params.len(), OTHER_PARAMS_SIZE);
@@ -2307,7 +2321,7 @@ pub fn patch_params_sim(params: &[f32], params_sim: &SimulationParameters) -> Si
 }
 
 pub fn eval_nn(
-    params: &[f32],
+    params: &[fxx],
     params_phys: &PhysicsParameters,
     params_sim: &SimulationParameters,
 ) -> Vec<TrackEvaluation> {
@@ -2420,7 +2434,7 @@ pub fn eval_nn(
                               dirs,
                               dirs_second_layer,
                               internals,
-                              current_segment_f32,
+                              current_segment_fxx,
                               simulation_vars| {
                             nn_processor.process(
                                 time,
@@ -2428,7 +2442,7 @@ pub fn eval_nn(
                                 dpenalty,
                                 dirs,
                                 dirs_second_layer,
-                                current_segment_f32,
+                                current_segment_fxx,
                                 internals,
                                 &params_sim,
                                 simulation_vars,
@@ -2441,7 +2455,7 @@ pub fn eval_nn(
                     }
 
                     if simulation.reward_path_processor.all_acquired() {
-                        early_finish_percent = (steps_quota - i) as f32 / steps_quota as f32;
+                        early_finish_percent = (steps_quota - i) as fxx / steps_quota as fxx;
                         break;
                     }
                 }
@@ -2481,12 +2495,16 @@ pub fn eval_nn(
     }
 }
 
-fn from_f64_to_f32_vec(pos: &[f64]) -> Vec<f32> {
-    pos.iter().copied().map(|x| x as f32).collect()
+fn from_f64_to_fxx_vec(pos: &[f64]) -> Vec<fxx> {
+    pos.iter().copied().map(|x| x as fxx).collect()
 }
 
-fn from_dvector_to_f32_vec(pos: &DVector<f64>) -> Vec<f32> {
-    pos.iter().copied().map(|x| x as f32).collect()
+fn from_dvector_to_fxx_vec(pos: &DVector<f64>) -> Vec<fxx> {
+    pos.iter().copied().map(|x| x as fxx).collect()
+}
+
+fn to_vec_fxx(pos: &[f32]) -> Vec<fxx> {
+    pos.iter().copied().map(|x| x as fxx).collect::<Vec<_>>()
 }
 
 pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
@@ -2509,8 +2527,8 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
 
     let now = Instant::now();
     let mut de = self_adaptive_de(input_done, |pos| {
-        let evals = eval_nn(pos, &params_phys, params_sim);
-        -sum_evals(&evals, params_sim, false)
+        let evals = eval_nn(&to_vec_fxx(pos), &params_phys, params_sim);
+        -sum_evals(&evals, params_sim, false) as f32
     });
     for pos in 0..100_000 {
         let value = de.iter().next().unwrap();
@@ -2520,7 +2538,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
         if pos % 300 == 0 && pos != 0 {
             let (cost, vec) = de.best().unwrap();
             println!("cost: {}", cost);
-            print_evals(&eval_nn(vec, &params_phys, params_sim));
+            print_evals(&eval_nn(&to_vec_fxx(vec), &params_phys, params_sim));
         }
         if pos % 1000 == 0 && pos != 0 {
             let (_, vec) = de.best().unwrap();
@@ -2530,7 +2548,7 @@ pub fn evolve_by_differential_evolution(params_sim: &SimulationParameters) {
     // show the result
     let (cost, pos) = de.best().unwrap();
     println!("cost: {}", cost);
-    print_evals(&eval_nn(pos, &params_phys, params_sim));
+    print_evals(&eval_nn(&to_vec_fxx(pos), &params_phys, params_sim));
     println!("(vec!{:?}, vec!{:?})", nn_sizes, pos);
 }
 
@@ -2547,8 +2565,8 @@ pub fn evolve_by_differential_evolution_custom(
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
     let mut de = self_adaptive_de(input_done, |pos| {
-        let evals = eval_nn(pos, &params_phys, params_sim);
-        -sum_evals(&evals, params_sim, false)
+        let evals = eval_nn(&to_vec_fxx(pos), &params_phys, params_sim);
+        -sum_evals(&evals, params_sim, false) as f32
     });
 
     let mut true_params_sim = SimulationParameters::true_metric(&params_sim);
@@ -2560,13 +2578,13 @@ pub fn evolve_by_differential_evolution_custom(
         }
         let (value, point) = de.best().unwrap();
 
-        true_params_sim = patch_params_sim(point, &true_params_sim);
+        true_params_sim = patch_params_sim(&to_vec_fxx(point), &true_params_sim);
 
-        let evals = eval_nn(point, params_phys, &params_sim);
-        let true_evals = eval_nn(point, params_phys, &true_params_sim);
+        let evals = eval_nn(&to_vec_fxx(point), params_phys, &params_sim);
+        let true_evals = eval_nn(&to_vec_fxx(point), params_phys, &true_params_sim);
 
         result.push(EvolveOutputEachStep {
-            nn: point.iter().copied().collect(),
+            nn: to_vec_fxx(point),
             evals_cost: sum_evals(&evals, params_sim, false),
             true_evals_cost: sum_evals(&true_evals, &true_params_sim, false),
             evals,
@@ -2597,7 +2615,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         .population_size(100)
         .sample_mean(params_sim.evolution_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
-            let evals = eval_nn(&from_dvector_to_f32_vec(&x), &params_phys, &params_sim);
+            let evals = eval_nn(&from_dvector_to_fxx_vec(&x), &params_phys, &params_sim);
             -sum_evals(&evals, &params_sim, false) as f64
         })
         .unwrap();
@@ -2611,7 +2629,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
         if pos == 0 {
             print_evals(&eval_nn(
-                &from_dvector_to_f32_vec(&point),
+                &from_dvector_to_fxx_vec(&point),
                 &params_phys,
                 &params_sim,
             ));
@@ -2619,7 +2637,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
         println!("{pos}. {value}, {:?}", now.elapsed() / (pos + 1) as u32);
         if pos % 10 == 0 && pos != 0 {
             print_evals(&eval_nn(
-                &from_dvector_to_f32_vec(&point),
+                &from_dvector_to_fxx_vec(&point),
                 &params_phys,
                 &params_sim,
             ));
@@ -2628,7 +2646,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
             println!(
                 "(vec!{:?}, vec!{:?})",
                 nn_sizes,
-                &from_dvector_to_f32_vec(&point)
+                &from_dvector_to_fxx_vec(&point)
             );
         }
     }
@@ -2639,7 +2657,7 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
     input_done = solution.iter().copied().collect();
     println!("(vec!{:?}, vec!{:?})", nn_sizes, solution.as_slice());
     let evals = eval_nn(
-        &from_dvector_to_f32_vec(&&solution),
+        &from_dvector_to_fxx_vec(&&solution),
         &params_phys,
         &params_sim,
     );
@@ -2663,21 +2681,21 @@ pub fn evolve_by_cma_es(params_sim: &SimulationParameters) {
 
 #[derive(Serialize, Deserialize)]
 struct EvolveOutputEachStep {
-    nn: Vec<f32>,
+    nn: Vec<fxx>,
     evals: Vec<TrackEvaluation>,
-    evals_cost: f32,
+    evals_cost: fxx,
     true_evals: Vec<TrackEvaluation>,
-    true_evals_cost: f32,
+    true_evals_cost: fxx,
 }
 
 pub fn evolve_by_cma_es_custom(
     params_sim: &SimulationParameters,
     params_phys: &PhysicsParameters,
-    nn_input: &[f32],
+    nn_input: &[fxx],
     population_size: usize,
     generations_count: usize,
     step_size: Option<f64>,
-    stop_at: Option<f32>,
+    stop_at: Option<fxx>,
 ) -> Vec<EvolveOutputEachStep> {
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let nn_len = params_sim.nn.get_nns_len();
@@ -2691,7 +2709,7 @@ pub fn evolve_by_cma_es_custom(
         .cm(params_sim.evolution_learning_rate)
         .sample_mean(params_sim.evolution_sample_mean)
         .build(|x: &DVector<f64>| -> f64 {
-            let evals = eval_nn(&from_dvector_to_f32_vec(&x), params_phys, params_sim);
+            let evals = eval_nn(&from_dvector_to_fxx_vec(&x), params_phys, params_sim);
             -sum_evals(&evals, params_sim, false) as f64
         })
         .unwrap();
@@ -2707,7 +2725,7 @@ pub fn evolve_by_cma_es_custom(
         }
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
 
-        let nn = from_dvector_to_f32_vec(&point);
+        let nn = from_dvector_to_fxx_vec(&point);
         true_params_sim = patch_params_sim(&nn, &true_params_sim);
 
         let evals = eval_nn(&nn, params_phys, &params_sim);
@@ -2750,10 +2768,10 @@ pub fn evolve_by_cma_es_custom(
 
 #[inline(always)]
 fn mod_and_calc_vec<T>(
-    x: &mut Vec<f32>,
-    f: &mut dyn FnMut(&Vec<f32>) -> T,
+    x: &mut Vec<fxx>,
+    f: &mut dyn FnMut(&Vec<fxx>) -> T,
     idx: usize,
-    y: f32,
+    y: fxx,
 ) -> T {
     let xtmp = x[idx];
     x[idx] = xtmp + y;
@@ -2762,7 +2780,7 @@ fn mod_and_calc_vec<T>(
     fx1
 }
 
-fn forward_diff_vec(x: &Vec<f32>, f: &mut dyn FnMut(&Vec<f32>) -> f32) -> Vec<f32> {
+fn forward_diff_vec(x: &Vec<fxx>, f: &mut dyn FnMut(&Vec<fxx>) -> fxx) -> Vec<fxx> {
     let step = 0.01;
     let fx = (f)(x);
     let mut xt = x.clone();
@@ -2835,7 +2853,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             let evals = eval_nn(
-                &from_f64_to_f32_vec(&p.to_vec()),
+                &from_f64_to_fxx_vec(&p.to_vec()),
                 &self.params_phys,
                 &self.params_sim,
             );
@@ -2849,7 +2867,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
         fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
             Ok(forward_diff_ndarray_f64(p, &|x| {
                 let evals = eval_nn(
-                    &from_f64_to_f32_vec(&x.to_vec()),
+                    &from_f64_to_fxx_vec(&x.to_vec()),
                     &self.params_phys,
                     &self.params_sim,
                 );
@@ -2938,7 +2956,7 @@ fn evolve_by_bfgs(params_sim: &SimulationParameters) {
     // let input_vec = nn_sizes.clone(), &res.state.best_param.clone().unwrap().to_vec();
 
     let evals = eval_nn(
-        &from_f64_to_f32_vec(&input_vec.to_vec()),
+        &from_f64_to_fxx_vec(&input_vec.to_vec()),
         &params_phys,
         params_sim,
     );
@@ -2953,8 +2971,8 @@ pub fn evolve_by_particle_swarm_custom(
     params_phys: &PhysicsParameters,
     population_size: usize,
     generations_count: usize,
-    best_start: Option<Vec<f32>>,
-    stop_at: Option<f32>,
+    best_start: Option<Vec<fxx>>,
+    stop_at: Option<fxx>,
 ) -> Vec<EvolveOutputEachStep> {
     use argmin::core::PopulationState;
     use argmin::core::Problem;
@@ -2989,7 +3007,7 @@ pub fn evolve_by_particle_swarm_custom(
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             let evals = eval_nn(
-                &from_f64_to_f32_vec(&p.to_vec()),
+                &from_f64_to_fxx_vec(&p.to_vec()),
                 &self.params_phys,
                 &self.params_sim,
             );
@@ -3037,7 +3055,7 @@ pub fn evolve_by_particle_swarm_custom(
         state = solver.next_iter(&mut problem, state).unwrap().0;
         let (point, value) = (&state.individual.as_ref().unwrap().position, state.cost);
 
-        let nn = from_f64_to_f32_vec(point.as_slice().unwrap());
+        let nn = from_f64_to_fxx_vec(point.as_slice().unwrap());
         true_params_sim = patch_params_sim(&nn, &true_params_sim);
 
         let evals = eval_nn(&nn, params_phys, &params_sim);
@@ -3072,7 +3090,7 @@ pub fn evolve_by_particle_swarm_custom(
 
 fn calc_gradient(params_sim: &SimulationParameters) {
     let nn_len = params_sim.nn.get_nns_len();
-    let input_done: Vec<f32> = todo!(); //include!("nn.data").1;
+    let input_done: Vec<fxx> = todo!(); //include!("nn.data").1;
     assert_eq!(input_done.len(), nn_len);
     let time = Instant::now();
     let mut count = 0;
@@ -3112,6 +3130,7 @@ impl Default for NnParameters {
             inv_distance_coef: 20.,
             inv_distance_pow: 0.5,
             view_angle_ratio: 2. / 6.,
+            pass_current_physics: false,
 
             dirs_size: 21,
             pass_dirs: true,
@@ -3172,7 +3191,7 @@ impl Default for SimulationParameters {
 
             mutate_car_enable: false,
             mutate_car_count: 3,
-            mutate_car_angle_range: Clamped::new(0.7, 0., TAU / 8.),
+            mutate_car_angle_range: Clamped::new(0.7, 0., TAUx / 8.),
 
             rewards_enable_early_acquire: true,
             rewards_add_each_acquire: false,
@@ -3290,7 +3309,7 @@ fn save_runs(result: Vec<Vec<EvolveOutputEachStep>>, name: &str) {
 fn evolve_simple_physics(
     params_sim: &SimulationParameters,
     params_phys: &PhysicsParameters,
-    input: &[f32],
+    input: &[fxx],
     population_size: usize,
     generations_count_main: usize,
     generations_count_adapt: usize,
@@ -3399,14 +3418,14 @@ fn test_params_sim_evolve_simple(
     )
 }
 
-fn random_input_by_len(len: usize, limit: f32) -> Vec<f32> {
+fn random_input_by_len(len: usize, limit: fxx) -> Vec<fxx> {
     let mut rng = thread_rng();
     (0..len)
         .map(|_| rng.gen_range(-limit..limit))
-        .collect::<Vec<f32>>()
+        .collect::<Vec<fxx>>()
 }
 
-fn random_input(params_sim: &SimulationParameters) -> Vec<f32> {
+fn random_input(params_sim: &SimulationParameters) -> Vec<fxx> {
     random_input_by_len(
         params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE,
         params_sim.evolution_start_input_range,
@@ -3417,7 +3436,7 @@ fn test_params_sim_fn<
     F: Fn(
             &SimulationParameters,
             &PhysicsParameters,
-            &[f32],
+            &[fxx],
             usize,
             usize,
         ) -> Vec<EvolveOutputEachStep>
@@ -3525,7 +3544,7 @@ fn test_params_sim_particle_swarm(
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
-struct Dirs(Vec<Option<f32>>);
+struct Dirs(Vec<Option<fxx>>);
 #[derive(Default, Serialize, Deserialize, Clone)]
 struct TrackDirs(Vec<Dirs>);
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -3534,7 +3553,7 @@ struct AllTrackDirs(Vec<TrackDirs>);
 fn eval_tracks_dirs(
     params_sim: &SimulationParameters,
     params_phys: &PhysicsParameters,
-    input: &[f32],
+    input: &[fxx],
 ) -> AllTrackDirs {
     let evals = eval_nn(&input, &params_phys, &params_sim);
     for i in evals {
@@ -3599,7 +3618,7 @@ fn eval_tracks_dirs(
                       dirs,
                       dirs_second_layer,
                       internals,
-                      current_segment_f32,
+                      current_segment_fxx,
                       simulation_vars| {
                     result.0.last_mut().unwrap().0.push(Dirs(dirs.to_vec()));
                     nn_processor.process(
@@ -3608,7 +3627,7 @@ fn eval_tracks_dirs(
                         dpenalty,
                         dirs,
                         dirs_second_layer,
-                        current_segment_f32,
+                        current_segment_fxx,
                         internals,
                         &params_sim,
                         simulation_vars,
@@ -3629,7 +3648,7 @@ fn eval_tracks_dirs(
     result
 }
 
-fn eval_ae(params: &[f32], all_tracks_dirs: &AllTrackDirs, nn_params: &NnParameters) -> f32 {
+fn eval_ae(params: &[fxx], all_tracks_dirs: &AllTrackDirs, nn_params: &NnParameters) -> fxx {
     let mut loss = 0.;
     let mut ae_processor = NnProcessorAutoencoder::new(&params, nn_params.clone());
     for TrackDirs(track_dirs) in &all_tracks_dirs.0 {
@@ -3639,22 +3658,22 @@ fn eval_ae(params: &[f32], all_tracks_dirs: &AllTrackDirs, nn_params: &NnParamet
         }
         loss += ae_processor.get_autoencoder_loss();
     }
-    loss / all_tracks_dirs.0.len() as f32
+    loss / all_tracks_dirs.0.len() as fxx
 }
 
 fn evolve_by_cma_es_custom_ae(
-    input: &[f32],
+    input: &[fxx],
     all_tracks_dirs: &AllTrackDirs,
     nn_params: &NnParameters,
     population_size: usize,
     generations_count: usize,
-) -> Vec<f32> {
+) -> Vec<fxx> {
     let input_done: Vec<f64> = input.iter().map(|x| *x as f64).collect();
 
     let mut state = cmaes::options::CMAESOptions::new(input_done, 10.)
         .population_size(population_size)
         .build(|x: &DVector<f64>| -> f64 {
-            -eval_ae(&from_dvector_to_f32_vec(&x), all_tracks_dirs, nn_params) as f64
+            -eval_ae(&from_dvector_to_fxx_vec(&x), all_tracks_dirs, nn_params) as f64
         })
         .unwrap();
 
@@ -3672,12 +3691,12 @@ fn evolve_by_cma_es_custom_ae(
         }
     }
 
-    from_dvector_to_f32_vec(&state.overall_best_individual().unwrap().point)
+    from_dvector_to_fxx_vec(&state.overall_best_individual().unwrap().point)
 }
 
 #[allow(unused_imports, unused_variables)]
 fn evolve_by_bfgs_autoencoder(
-    input: &[f32],
+    input: &[fxx],
     all_tracks_dirs: &AllTrackDirs,
     nn_params: &NnParameters,
 ) {
@@ -3739,7 +3758,7 @@ fn evolve_by_bfgs_autoencoder(
 
         fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
             Ok(-eval_ae(
-                &from_f64_to_f32_vec(&p.to_vec()),
+                &from_f64_to_fxx_vec(&p.to_vec()),
                 &self.all_tracks_dirs,
                 &self.nn_params,
             ) as f64)
@@ -3752,7 +3771,7 @@ fn evolve_by_bfgs_autoencoder(
         fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
             Ok(forward_diff_ndarray_f64(p, &|x| {
                 -eval_ae(
-                    &from_f64_to_f32_vec(&p.to_vec()),
+                    &from_f64_to_fxx_vec(&p.to_vec()),
                     &self.all_tracks_dirs,
                     &self.nn_params,
                 ) as f64
@@ -3807,7 +3826,7 @@ fn evolve_by_bfgs_autoencoder(
     // let input_vec = nn_sizes.clone(), &res.state.best_param.clone().unwrap().to_vec();
 
     let evals = eval_ae(
-        &from_f64_to_f32_vec(&input_vec.to_vec()),
+        &from_f64_to_fxx_vec(&input_vec.to_vec()),
         &all_tracks_dirs,
         &nn_params,
     );
@@ -3854,17 +3873,17 @@ fn print_mean_std_of_best_nns(params_sim: &SimulationParameters) {
         for i in 0..output_size {
             for j in 0..input_size {
                 // Collect all values at this matrix position across networks
-                let values: Vec<f32> = all_nns
+                let values: Vec<fxx> = all_nns
                     .iter()
                     .map(|nn| nn.layers[layer_idx].matrix[i][j])
                     .collect();
 
                 // Calculate mean
-                let mean: f32 = values.iter().sum::<f32>() / values.len() as f32;
+                let mean: fxx = values.iter().sum::<fxx>() / values.len() as fxx;
 
                 // Calculate std dev
                 let variance =
-                    values.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / values.len() as f32;
+                    values.iter().map(|x| (x - mean).powi(2)).sum::<fxx>() / values.len() as fxx;
                 let std_dev = variance.sqrt();
 
                 println!(
@@ -3878,17 +3897,17 @@ fn print_mean_std_of_best_nns(params_sim: &SimulationParameters) {
         println!("\nBias stats ({}):", output_size);
         for i in 0..output_size {
             // Collect all values at this bias position across networks
-            let values: Vec<f32> = all_nns
+            let values: Vec<fxx> = all_nns
                 .iter()
                 .map(|nn| nn.layers[layer_idx].bias[i])
                 .collect();
 
             // Calculate mean
-            let mean: f32 = values.iter().sum::<f32>() / values.len() as f32;
+            let mean: fxx = values.iter().sum::<fxx>() / values.len() as fxx;
 
             // Calculate std dev
             let variance =
-                values.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / values.len() as f32;
+                values.iter().map(|x| (x - mean).powi(2)).sum::<fxx>() / values.len() as fxx;
             let std_dev = variance.sqrt();
 
             println!("Position [{}]: mean = {:.3}, std = {:.3}", i, mean, std_dev);
@@ -3903,7 +3922,7 @@ fn interpolate_two_nns(params_sim: &SimulationParameters, params_phys: &PhysicsP
     let all_nns = all_runs
         .iter()
         .map(|x| x.last().unwrap().nn.clone())
-        .collect::<Vec<Vec<f32>>>();
+        .collect::<Vec<Vec<fxx>>>();
 
     let nn1 = all_nns[0].clone();
     let evals1 = eval_nn(&nn1, params_phys, params_sim);
@@ -3911,18 +3930,18 @@ fn interpolate_two_nns(params_sim: &SimulationParameters, params_phys: &PhysicsP
     let cost1 = sum_evals(&evals1, params_sim, true);
     println!("cost1 = {:.3}", cost1);
 
-    let mut data: Vec<Vec<(f32, f32)>> = vec![];
+    let mut data: Vec<Vec<(fxx, fxx)>> = vec![];
     for i in 0..10 {
         let nn1 = all_nns[i].clone();
         for j in (i + 1)..10 {
             let nn2 = all_nns[j].clone();
-            let mut data_row: Vec<(f32, f32)> = vec![];
-            for t in (0..=30).map(|x| x as f32 / 30.) {
+            let mut data_row: Vec<(fxx, fxx)> = vec![];
+            for t in (0..=30).map(|x| x as fxx / 30.) {
                 let nn_t = nn1
                     .iter()
                     .zip(nn2.iter())
                     .map(|(x, y)| x * t + y * (1. - t))
-                    .collect::<Vec<f32>>();
+                    .collect::<Vec<fxx>>();
 
                 let evals = eval_nn(&nn_t, params_phys, params_sim);
                 let cost = sum_evals(&evals, params_sim, true);
@@ -3961,8 +3980,8 @@ fn evaluate_noise(params_sim: &SimulationParameters, params_phys: &PhysicsParame
         .map(|i| {
             let mut params_sim = params_sim.clone();
             let now = Instant::now();
-            let mut data_row: Vec<(f32, f32)> = vec![];
-            for t in (0..=t_amount).map(|x| x as f32 / t_amount as f32 / 2.) {
+            let mut data_row: Vec<(fxx, fxx)> = vec![];
+            for t in (0..=t_amount).map(|x| x as fxx / t_amount as fxx / 2.) {
                 params_sim.random_output_probability = t;
                 let evals = eval_nn(&params, &params_phys, &params_sim);
                 let cost = sum_evals(&evals, &params_sim, true);
@@ -3994,7 +4013,7 @@ fn eval_nn_from_python(params_sim: &SimulationParameters, params_phys: &PhysicsP
     print_evals(&evals);
 }
 
-fn read_nn_from_file(file_path: &str) -> Vec<f32> {
+fn read_nn_from_file(file_path: &str) -> Vec<fxx> {
     let file = std::fs::read_to_string(file_path).unwrap();
     let nn: NeuralNetworkUnoptimized = serde_json::from_str(&file).unwrap();
     nn.to_optimized().get_values().iter().copied().collect()
@@ -4042,6 +4061,86 @@ pub fn evolution() {
     params_sim.evolution_start_input_range = 1.;
 
     let mut params_sim_copy = params_sim.clone();
+
+    #[rustfmt::skip]
+    let params = vec![-1.0140746,7.969905,3.255649,-0.45773593,-8.814844,5.5313916,2.2310336,-6.857345,0.03863446,-6.8043175,3.8996851,4.1762123,6.342612,8.253213,10.223366,-3.637407,-4.825101,-6.223656,-5.710869,-2.1575553,0.3453375,0.38729206,-0.84449524,4.307528,8.513787,9.111382,5.708905,-5.0000615,5.2223225,-4.882063,-6.8563724,-3.2832754,10.826247,5.1875124,1.0637699,5.1628504,7.831787,1.6877187,2.3491712,10.182303,-2.650052,-5.8988256,2.2731888,-5.933333,-2.4040658,-0.6451996,2.6045537,6.8096733,1.5365217,0.112321965,2.7377155,-6.143689,-0.6136311,2.9335635,4.068984,-2.3936646,4.105215,8.365123,1.4176098,8.74154,7.0931883,-0.4234664,9.790796,-5.3568335,-6.184567,-1.878323,-0.44523206,-4.3636174,-10.265222,11.838661,-3.2664053,-10.227155,-1.1348896,-12.036602,-3.6037822,10.177021,2.8815486,-10.635429,5.409533,1.2621099,6.355703,3.449306,3.7818124,3.4725761,-0.221656,-18.189472,4.8883586,6.5181103,7.976028,2.3536148,-11.689482,-5.211554,-7.1512904,-6.6349115,-3.059728,-8.888863,-3.1679716,5.815808,-6.8705287,-1.28352,-3.3116326,-3.6879137,-3.8458946,4.145627,10.688421,6.8072286,-8.7282295,6.2244353,1.6423159,0.4508205,2.1093874,5.083254,7.8963084,-10.452589,1.5590851,-9.058856,0.2950253,4.867293,-0.22889403,2.3118467,4.435561,1.0126159,1.2630934,0.6034488,-7.261848,-6.456671,-8.173853,-2.5947015,1.6566625,0.8303851,-3.9235418,-3.6188898,-5.6813827,8.366194,2.9604132,-3.100621,-2.343282,7.5686,0.7278174,-12.403346,-7.4190397,-12.375827,-1.6933929,1.2848308,-2.6327226,-6.1778817,-0.69299924,3.7549577,-0.28050584,0.7778191,-3.4546475,-0.70060945,-4.8373885,4.4729676,-3.1355038,7.8780136,3.5531738,8.082677,-2.719097,-1.0375485,5.097316,-1.9870536,-9.435947,5.1853786,0.77007765,0.77070636,-3.4930844,5.965919,3.0085702,-0.71396536,-1.0684042,1.980887,3.3859272,-3.9332833,-0.97807574,0.67047924,-0.77030766,1.1952081,8.525371,-0.27639112,-8.219419,-4.3506627,0.93446237,3.955072,-3.682673,-1.5677782,-6.7918572,4.556543,8.988926,1.6153657,13.157081,-7.3095202,-6.7097244,-1.7330406,-5.400186,1.8234549,10.5188875,-4.4084005,-2.8515608,4.394829,-10.170477,-3.6425822,5.3774214,8.574465,5.125784,-2.592275,0.416314,-1.4990387,-1.3619555,9.500459,-3.345467,1.6097945,-2.4869363,6.2751403,-2.7470694,-1.241509,9.263079,-2.357499,-0.71642643,9.081934,7.098453,13.064735,6.072085,0.86135876,0.42790878,-13.554738,-4.993654,7.828532,-0.26332355,1.3722762,3.2465909,-1.5418559,-3.5693011,-5.8441744,6.4627514,2.8090293,0.31156737,-3.857934,-11.280977,-4.0953608,-7.7492537,0.58041936,8.433039,-4.3115425,0.3458287,2.1145627,4.65377,-4.6333575,2.3745975,-1.8756385,4.223438,6.89845,0.79969174,-1.7829785,1.6288344,-1.8161334,-3.4675262,4.832272,-1.6210185,-1.696128,1.0028566,7.706657,-6.269442,-3.4574616,-4.935856,-0.52170604,9.285264,-1.5701663,0.94492525,-2.3315585,-6.3180594,1.2134569,-1.0206414,-1.8991766,-3.3108075,-1.8519135,-5.114469,-8.711949,5.9418797,5.3772616,-3.3919933,5.016679,-9.09488,15.286478,-3.5477734,-10.717793,-8.667156,3.430417,-9.043924,-6.3868427,3.771201,-9.276051,1.6036136,4.0459547,8.174598,13.675274,3.1494143,13.16244,2.141045,3.4357753,0.46819896,3.7956643,-6.269334,2.6654906,0.88894075,0.89534014,-1.8865765,-5.9851017,2.8273027,6.1478505,-7.5374966,-1.1878409,-2.6607187,1.4505111,-10.753712,-6.662928,-0.49729615,-2.2162392,2.1547415,-1.5608006,-6.2728963,0.29494822,2.0775702,0.94253886,-3.3023574,0.20184654,3.6718824,10.206356,-3.8106627,-0.86780673,-1.8850509,-4.458633,-0.2645319,-5.911129,5.141833,-6.1215625,3.2625692,5.239356,6.819452,6.961727,2.2123358,-0.37622842,3.0404775,-0.5514076,3.5382001,-0.4843125,9.572454,3.317881,-7.289935,8.832711,-7.854359,-3.8881705,1.4729297,-2.0490656,-6.3347015,0.12885739,11.582888,-8.913492,-6.617836,1.5036279,1.3143181,-4.920342,3.9786863,-4.9569116,8.047843,-0.64386404,-7.1422963,6.4997573,-5.8164296,-2.0426564,3.9373107,5.9638896,1.1785966,7.270487,-3.711227,-2.8631806,-3.3163843,-2.6125124,2.950503,-9.781572,1.1625123,7.967913,0.6939382,10.151258,-8.032308,-0.117915586,-1.595022,-7.2094173,5.5032854,1.3340335,1.4497712,0.8595004,3.7436821,-0.55241823,-2.5470426,-6.1092176,-10.614954,-5.7577777,0.35974905,-1.9811981,0.0054431106,-8.374586,6.760215,4.6665254,-2.4265747,3.263907,3.302049,9.178065,2.2093327,-11.06965,0.75237775,-4.508033,3.2366216,8.981704,5.302875,-8.408273,3.1710312,0.5038109,-0.73679346,-1.4566271,-12.260539,0.8673921,-1.9078183,-11.013678,2.750532,3.2524343,9.519965,12.611303,-2.7479165,6.3550787,1.4470017,-0.12573671,-6.489775,7.47961,0.7660119,2.517699,-4.97592,-8.806205,5.183689,0.123767346,-5.8479776,-0.12721643,7.4339147,5.3236895,2.7361069,-3.559886,3.7529047,-5.3707476,3.5633106,3.2847552,7.4842453,4.7480836,5.0248837,-3.7692423,-1.7893031,-3.1387558,1.1278142,-8.203136,2.105451,1.8934679,1.1727809,-3.0505586,-0.3243254,4.8932843,5.556009,-4.2797256,5.2714214,4.9797897,2.9320369,3.3040593,0.21399115,2.205502,2.7676451,4.722789,-2.0099642,5.958663,5.9893565,-14.761563,-2.696921,-1.9571339,-1.3625263,-4.778177,5.32249,-1.0973876,-0.2765338,-4.162304,-7.1115403,2.008183,5.265838,7.005275,0.998941,10.689762,-0.7107461,-2.3121784,1.6911142,0.7218279,-9.3835,-3.8390162,1.7028191,2.462449,0.035071786,-8.322564,2.435498,2.2931461,0.9931594,-0.8946622,3.4547412,-5.8351493,10.893359,-2.5663805,0.97312886,3.7423441,-0.13199523,5.793001,4.774439,-2.5494466,-11.072732,0.14585106,5.24943,-3.491153,-4.736221,-1.0961194,2.4460342,-13.608879,-0.32326534,2.3322601,5.4159718,-6.0713606,-4.9699006,4.9630904,4.758529,-3.9612696,-3.5901847,-7.9037423,4.1176996,5.1404896,3.7284865,3.2361503,0.15753356,-10.480198,-0.27333233,-12.892551,7.2325597,6.4994297,1.8522301,-7.6900454,-5.385723,13.301702,11.036094,2.9045067,-1.4765296,3.3513288,6.0128174,9.808207,0.62630045,-5.2958302,0.9629272,-6.148471,-9.973472,2.5368805,1.2529771,1.9739354,5.3408813,-0.66777575,-5.8822393,-5.032582,-2.2442875,11.496572,5.9201093,-1.322113,6.150977,-5.9573584,-3.654369,-8.140595,1.5725151,6.523251,-1.0965878,11.567554,1.665575,6.663997,1.0801463,6.6025505];
+
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true;
+    // params_sim.tracks_enable_mirror = true;
+
+    params_sim.nn.pass_current_track = true;
+    params_sim.nn.pass_current_physics = true;
+    params_sim.nn.max_tracks = 6;
+
+    // params_sim.enable_track("straight_45");
+    // params_sim.enable_track("loop");
+    // params_sim.enable_track("straight_turn");
+    // // params_sim.enable_track("bubble_straight");
+    // // params_sim.enable_track("bubble_180");
+    // params_sim.enable_track("separation");
+
+    // params_sim.simulation_random_output_second_way = true;
+    // params_sim.random_output_probability = 0.05;
+    // params_sim.evolution_learning_rate = 0.9;
+
+    params_sim.eval_add_other_physics = vec![
+        PhysicsPatch {
+            traction: Some(0.15),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            traction: Some(0.25),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            traction: Some(0.5),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            traction: Some(1.0),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            friction_coef: Some(1.0),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            friction_coef: Some(0.0),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            acceleration_ratio: Some(1.0),
+            ..PhysicsPatch::default()
+        },
+        PhysicsPatch {
+            acceleration_ratio: Some(0.6),
+            ..PhysicsPatch::default()
+        },
+    ];
+
+    params_sim.nn.ranking_hidden_layers =
+        vec![LayerDescription::new(10, ActivationFunction::SqrtSigmoid)];
+    let result = evolve_by_cma_es_custom(
+        &params_sim,
+        &params_phys,
+        // &random_input(&params_sim),
+        &params,
+        30,
+        50,
+        Some(1.0),
+        None,
+    );
+    println!("{:?}", result.last().unwrap().nn);
+
+    return;
+
+    params_sim.nn.use_ranking_network = true;
+    params_sim.nn.rank_without_physics = true;
+    test_params_sim(&params_sim, &params_phys, "hard2_ranker_all_maps");
+    params_sim = params_sim_copy.clone();
+
+    return;
 
     test_params_sim(&params_sim, &params_phys, "hard2_default");
     params_sim = params_sim_copy.clone();
@@ -4164,15 +4263,15 @@ pub fn evolution() {
     params_sim = params_sim_copy.clone();
 }
 
-pub const RUN_EVOLUTION: bool = true;
+pub const RUN_EVOLUTION: bool = false;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
-const PRINT: bool = false;
+const PRINT: bool = true;
 const PRINT_EVERY_10: bool = false;
 const PRINT_EVERY_10_ONLY_EVALS: bool = true;
 const PRINT_EVALS: bool = true;
 
-const RUNS_COUNT: usize = 60;
+const RUNS_COUNT: usize = 1;
 const POPULATION_SIZE: usize = 30;
 const GENERATIONS_COUNT: usize = 300;
 pub const OTHER_PARAMS_SIZE: usize = 1;

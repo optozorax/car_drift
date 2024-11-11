@@ -2,34 +2,29 @@ use crate::common::*;
 use crate::math::*;
 use crate::nn::sqrt_sigmoid;
 use egui::emath::RectTransform;
-use egui::pos2;
-use egui::vec2;
 use egui::Color32;
 use egui::DragValue;
 use egui::Painter;
-use egui::Pos2;
 use egui::Shape;
 use egui::Stroke;
 use egui::Ui;
-use egui::Vec2;
-use std::f32::consts::TAU;
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct PhysicsParameters {
-    pub traction_coefficient: f32,
-    pub gravity: f32,
-    pub friction_coefficient: f32,
-    pub full_force_on_speed: f32,
-    pub acceleration_ratio: f32,
-    pub rolling_resistance_coefficient: f32,
-    pub wheel_turn_per_time: f32,
-    pub angle_limit: f32,
-    pub wall_force: f32,
-    pub max_speed: f32,
+    pub traction_coefficient: fxx,
+    pub gravity: fxx,
+    pub friction_coefficient: fxx,
+    pub full_force_on_speed: fxx,
+    pub acceleration_ratio: fxx,
+    pub rolling_resistance_coefficient: fxx,
+    pub wheel_turn_per_time: fxx,
+    pub angle_limit: fxx,
+    pub wall_force: fxx,
+    pub max_speed: fxx,
     pub steps_per_time: usize,
-    pub time: f32,
-    pub simple_physics_ratio: f32, // 0 - hard, 1 - simple
+    pub time: fxx,
+    pub simple_physics_ratio: fxx, // 0 - hard, 1 - simple
 }
 
 impl Default for PhysicsParameters {
@@ -42,7 +37,7 @@ impl Default for PhysicsParameters {
             acceleration_ratio: 0.4, // 0.6 is good for me, 0.2 is good for normal physics
             rolling_resistance_coefficient: 0.006, // car tire, https://en.wikipedia.org/wiki/Rolling_resistance
             wheel_turn_per_time: 0.1,              // 0.07 is good for me
-            angle_limit: std::f32::consts::PI * 0.2,
+            angle_limit: PIx * 0.2,
             wall_force: 1000.,
             max_speed: 100.,
             steps_per_time: 3,
@@ -59,7 +54,7 @@ impl PhysicsParameters {
         ui.end_row();
 
         ui.label("Gravity:");
-        egui_f32_positive(ui, &mut self.gravity);
+        egui_fxx_positive(ui, &mut self.gravity);
         ui.end_row();
 
         ui.label("Friction coef:");
@@ -67,7 +62,7 @@ impl PhysicsParameters {
         ui.end_row();
 
         ui.label("Full force on speed:");
-        egui_f32_positive(ui, &mut self.full_force_on_speed);
+        egui_fxx_positive(ui, &mut self.full_force_on_speed);
         ui.end_row();
 
         ui.label("Acceleration ratio:");
@@ -99,11 +94,11 @@ impl PhysicsParameters {
         ui.end_row();
 
         ui.label("Wall force:");
-        egui_f32_positive(ui, &mut self.wall_force);
+        egui_fxx_positive(ui, &mut self.wall_force);
         ui.end_row();
 
         ui.label("Max speed:");
-        egui_f32_positive(ui, &mut self.max_speed);
+        egui_fxx_positive(ui, &mut self.max_speed);
         ui.end_row();
 
         ui.label("Steps per time:");
@@ -135,23 +130,23 @@ impl PhysicsParameters {
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 enum WheelAction {
     Nothing,
-    AccelerationForward(f32),
-    AccelerationBackward(f32),
-    Braking(f32),
+    AccelerationForward(fxx),
+    AccelerationBackward(fxx),
+    Braking(fxx),
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Wheel {
-    pos: Pos2,
-    angle: f32,
+    pos: Vecx2,
+    angle: fxx,
     action: WheelAction,
 
-    angle_speed: f32,
-    remove_turns: f32,
+    angle_speed: fxx,
+    remove_turns: fxx,
 }
 
 impl Wheel {
-    pub fn new(pos: Pos2, angle: f32) -> Self {
+    pub fn new(pos: Vecx2, angle: fxx) -> Self {
         Self {
             pos,
             angle,
@@ -161,66 +156,66 @@ impl Wheel {
         }
     }
 
-    pub fn get_rot1(&self) -> Pos2 {
-        rotate_around_origin(pos2(1., 0.), self.angle)
+    pub fn get_rot1(&self) -> Vecx2 {
+        rotate_around_origin(vecx2(1., 0.), self.angle)
     }
-    pub fn get_rot2(&self) -> Pos2 {
-        rotate_around_origin(pos2(-1., 0.), self.angle)
+    pub fn get_rot2(&self) -> Vecx2 {
+        rotate_around_origin(vecx2(-1., 0.), self.angle)
     }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
 pub struct Car {
-    center: Pos2,
-    size: Vec2,
-    angle: f32,
+    center: Vecx2,
+    size: Vecx2,
+    angle: fxx,
 
-    mass: f32,
-    moment_of_inertia: f32,
+    mass: fxx,
+    moment_of_inertia: fxx,
 
-    speed: Vec2,
-    angle_speed: f32,
+    speed: Vecx2,
+    angle_speed: fxx,
 
-    acceleration: Vec2,
-    angle_acceleration: f32,
+    acceleration: Vecx2,
+    angle_acceleration: fxx,
 
-    prev_acceleration: Vec2,
-    prev_speed: Vec2,
-    prev_angle_acceleration: f32,
-    prev_angle_speed: f32,
+    prev_acceleration: Vecx2,
+    prev_speed: Vecx2,
+    prev_angle_acceleration: fxx,
+    prev_angle_speed: fxx,
 
     wheels: Vec<Wheel>,
 
-    forces: Vec<(Pos2, Vec2)>,
+    forces: Vec<(Vecx2, Vecx2)>,
 
     up_wheels: Vec<usize>,
     rotated_wheels: Vec<usize>,
 
-    cached_for_angle: f32,
-    cached_angle_sin: f32,
-    cached_angle_cos: f32,
+    cached_for_angle: fxx,
+    cached_angle_sin: fxx,
+    cached_angle_cos: fxx,
 }
 
 impl Default for Car {
     fn default() -> Self {
         Car::new(
-            /* center = */ pos2(250., 250.),
-            /* size = */ vec2(100., 50.) / 2.,
+            /* center = */ vecx2(250., 250.),
+            /* size = */ vecx2(100., 50.) / 2.,
             /* angle = */ 0.,
             /* mass = */ 100.,
-            /* speed = */ vec2(0., 0.),
+            /* speed = */ vecx2(0., 0.),
             /* angle_speed = */ 0.,
             /* wheels = */
             vec![
                 // // four wheels
-                // Wheel::new(pos2(35., -12.), 0.),
-                // Wheel::new(pos2(35., 12.), 0.),
-                // Wheel::new(pos2(-35., 12.), 0.),
-                // Wheel::new(pos2(-35., -12.), 0.),
+                // Wheel::new(vecx2(35., -12.), 0.),
+                // Wheel::new(vecx2(35., 12.), 0.),
+                // Wheel::new(vecx2(-35., 12.), 0.),
+                // Wheel::new(vecx2(-35., -12.), 0.),
 
                 // two wheels
-                Wheel::new(pos2(35., 0.), 0.),
-                Wheel::new(pos2(-35., 0.), 0.),
+                Wheel::new(vecx2(35., 0.), 0.),
+                Wheel::new(vecx2(-35., 0.), 0.),
             ],
             // four wheels
             // /* up_wheels = */ vec![2, 3],
@@ -234,19 +229,19 @@ impl Default for Car {
     }
 }
 
-fn box_moment_of_inertia(size: Vec2, mass: f32) -> f32 {
+fn box_moment_of_inertia(size: Vecx2, mass: fxx) -> fxx {
     mass * (size.x * size.x + size.y * size.y) / 12.
 }
 
 impl Car {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        center: Pos2,
-        size: Vec2,
-        angle: f32,
-        mass: f32,
-        speed: Vec2,
-        angle_speed: f32,
+        center: Vecx2,
+        size: Vecx2,
+        angle: fxx,
+        mass: fxx,
+        speed: Vecx2,
+        angle_speed: fxx,
         wheels: Vec<Wheel>,
         up_wheels: Vec<usize>,
         rotated_wheels: Vec<usize>,
@@ -263,10 +258,10 @@ impl Car {
             rotated_wheels,
 
             moment_of_inertia: box_moment_of_inertia(size, mass),
-            acceleration: vec2(0., 0.),
+            acceleration: vecx2(0., 0.),
             angle_acceleration: 0.,
-            prev_acceleration: vec2(0., 0.),
-            prev_speed: vec2(0., 0.),
+            prev_acceleration: vecx2(0., 0.),
+            prev_speed: vecx2(0., 0.),
             prev_angle_acceleration: 0.,
             prev_angle_speed: 0.,
             forces: vec![],
@@ -276,7 +271,7 @@ impl Car {
         }
     }
 
-    pub fn change_position(&mut self, dangle: f32, dpos: Vec2, dangle_speed: f32, dspeed: Vec2) {
+    pub fn change_position(&mut self, dangle: fxx, dpos: Vecx2, dangle_speed: fxx, dspeed: Vecx2) {
         self.angle += dangle;
         self.center += dpos;
         self.speed += dspeed;
@@ -292,7 +287,7 @@ impl Car {
         }
     }
 
-    pub fn step(&mut self, dt: f32, params: &PhysicsParameters) {
+    pub fn step(&mut self, dt: fxx, params: &PhysicsParameters) {
         // Two-step Adams–Bashforth
         self.speed += (1.5 * self.acceleration - 0.5 * self.prev_acceleration) * dt;
         self.center += (1.5 * self.speed - 0.5 * self.prev_speed) * dt;
@@ -306,11 +301,11 @@ impl Car {
         // self.angle_speed += self.angle_acceleration * dt;
         // self.angle += self.angle_speed * dt;
 
-        if self.angle > std::f32::consts::TAU {
-            self.angle -= std::f32::consts::TAU;
+        if self.angle > TAUx {
+            self.angle -= TAUx;
         }
-        if self.angle < -std::f32::consts::TAU {
-            self.angle += std::f32::consts::TAU;
+        if self.angle < -TAUx {
+            self.angle += TAUx;
         }
 
         self.prev_acceleration = self.acceleration;
@@ -319,7 +314,7 @@ impl Car {
         self.prev_angle_speed = self.angle_speed;
 
         // these force act only for one moment
-        self.acceleration = vec2(0., 0.);
+        self.acceleration = vecx2(0., 0.);
         self.angle_acceleration = 0.;
 
         self.forces.clear();
@@ -345,7 +340,7 @@ impl Car {
     }
 
     // we know for certain that point is inside
-    pub fn apply_force(&mut self, pos: Pos2, dir: Vec2, params: &PhysicsParameters) {
+    pub fn apply_force(&mut self, pos: Vecx2, dir: Vecx2, params: &PhysicsParameters) {
         let dir = dir * (1. - params.simple_physics_ratio);
         let r = pos - self.center;
         let torque = cross(r, dir);
@@ -358,10 +353,10 @@ impl Car {
     }
 
     #[inline(always)]
-    pub fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
+    pub fn to_local_coordinates(&self, pos: Vecx2) -> Vecx2 {
         debug_assert_eq!(self.cached_for_angle, self.angle);
         rotate_around_origin_optimized(
-            (pos - self.center).to_pos2(),
+            pos - self.center,
             -self.cached_angle_sin,
             self.cached_angle_cos,
         )
@@ -369,68 +364,68 @@ impl Car {
 
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
-    pub fn from_local_coordinates(&self, pos: Pos2) -> Pos2 {
+    pub fn from_local_coordinates(&self, pos: Vecx2) -> Vecx2 {
         debug_assert_eq!(self.cached_for_angle, self.angle);
         rotate_around_origin_optimized(pos, self.cached_angle_sin, self.cached_angle_cos)
-            + self.center.to_vec2()
+            + self.center
     }
 
-    pub fn is_inside(&self, mut pos: Pos2) -> bool {
+    pub fn is_inside(&self, mut pos: Vecx2) -> bool {
         pos = self.to_local_coordinates(pos);
         pos.x.abs() < self.size.x && pos.y.abs() < self.size.y
     }
 
     #[inline(always)]
-    pub fn get_points(&self) -> [Pos2; 4] {
+    pub fn get_points(&self) -> [Vecx2; 4] {
         [
-            self.from_local_coordinates(pos2(-self.size.x, -self.size.y)),
-            self.from_local_coordinates(pos2(self.size.x, -self.size.y)),
-            self.from_local_coordinates(pos2(self.size.x, self.size.y)),
-            self.from_local_coordinates(pos2(-self.size.x, self.size.y)),
+            self.from_local_coordinates(vecx2(-self.size.x, -self.size.y)),
+            self.from_local_coordinates(vecx2(self.size.x, -self.size.y)),
+            self.from_local_coordinates(vecx2(self.size.x, self.size.y)),
+            self.from_local_coordinates(vecx2(-self.size.x, self.size.y)),
         ]
     }
 
-    pub fn get_wheels(&self) -> Vec<(Pos2, Pos2)> {
+    pub fn get_wheels(&self) -> Vec<(Vecx2, Vecx2)> {
         let draw_size = 10.;
         self.wheels
             .iter()
             .map(|wheel| {
                 (
-                    self.from_local_coordinates(wheel.pos + wheel.get_rot1().to_vec2() * draw_size),
-                    self.from_local_coordinates(wheel.pos + wheel.get_rot2().to_vec2() * draw_size),
+                    self.from_local_coordinates(wheel.pos + wheel.get_rot1() * draw_size),
+                    self.from_local_coordinates(wheel.pos + wheel.get_rot2() * draw_size),
                 )
             })
             .collect()
     }
 
-    pub fn speed_at_point(&self, pos: Pos2) -> Vec2 {
+    pub fn speed_at_point(&self, pos: Vecx2) -> Vecx2 {
         let r = pos - self.center;
-        let rotation_speed = vec2(-r.y, r.x) * self.angle_speed;
+        let rotation_speed = vecx2(-r.y, r.x) * self.angle_speed;
         rotation_speed + self.speed
     }
 
-    fn speed_at_wheel(&self, wheel: &Wheel) -> Vec2 {
+    fn speed_at_wheel(&self, wheel: &Wheel) -> Vecx2 {
         self.speed_at_point(self.wheel_pos(wheel))
     }
 
     // length always equal to 1
-    fn wheel_dir1(&self, wheel: &Wheel) -> Vec2 {
+    fn wheel_dir1(&self, wheel: &Wheel) -> Vecx2 {
         let pos = self.wheel_pos(wheel);
-        self.from_local_coordinates(wheel.pos + wheel.get_rot1().to_vec2()) - pos
+        self.from_local_coordinates(wheel.pos + wheel.get_rot1()) - pos
     }
 
-    fn wheel_pos(&self, wheel: &Wheel) -> Pos2 {
+    fn wheel_pos(&self, wheel: &Wheel) -> Vecx2 {
         self.from_local_coordinates(wheel.pos)
     }
 
     pub fn apply_wheels_force(
         &mut self,
-        drift_observer: &mut impl FnMut(usize, Vec2, f32),
+        drift_observer: &mut impl FnMut(usize, Vecx2, fxx),
         params: &PhysicsParameters,
     ) {
         // about traction: https://www.engineeringtoolbox.com/tractive-effort-d_1783.html
         let traction_force = params.traction_coefficient * self.mass * params.gravity;
-        let traction_per_wheel = traction_force / self.wheels.len() as f32;
+        let traction_per_wheel = traction_force / self.wheels.len() as fxx;
 
         // optimization in order to not clone wheels array
         // DO NOT USE WHEEL ARRAY INSIDE!!!
@@ -475,7 +470,7 @@ impl Car {
                 * speed_coefficient;
 
             let braking_or_acceleration_force = match wheel.action {
-                WheelAction::Nothing => vec2(0., 0.),
+                WheelAction::Nothing => vecx2(0., 0.),
                 WheelAction::AccelerationForward(ratio) => {
                     wheel_dir * params.acceleration_ratio * ratio * anti_speed_coefficient
                 }
@@ -498,11 +493,7 @@ impl Car {
                 total_force = total_force.normalized();
             }
 
-            drift_observer(
-                i,
-                self.wheel_pos(wheel).to_vec2(),
-                side_friction_force.length(),
-            );
+            drift_observer(i, self.wheel_pos(wheel), side_friction_force.length());
 
             total_force *= traction_per_wheel;
 
@@ -514,9 +505,8 @@ impl Car {
 
     pub fn get_internal_values(&self) -> InternalCarValues {
         InternalCarValues {
-            local_speed: rotate_around_origin(self.prev_speed.to_pos2(), -self.angle).to_vec2(),
-            local_acceleration: rotate_around_origin(self.prev_acceleration.to_pos2(), -self.angle)
-                .to_vec2(),
+            local_speed: rotate_around_origin(self.prev_speed, -self.angle),
+            local_acceleration: rotate_around_origin(self.prev_acceleration, -self.angle),
             angle_acceleration: self.prev_angle_acceleration,
             angle_speed: self.prev_angle_speed,
             wheel_angle: self.wheels[self.rotated_wheels[0]].angle,
@@ -526,13 +516,13 @@ impl Car {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct CarInput {
-    pub brake: f32, // 0..1
-    pub acceleration: f32,
-    pub remove_turn: f32, // 0..1
-    pub turn: f32,
+    pub brake: fxx, // 0..1
+    pub acceleration: fxx,
+    pub remove_turn: fxx, // 0..1
+    pub turn: fxx,
 }
 
-fn two_relus_to_ratio(a: f32, b: f32) -> f32 {
+fn two_relus_to_ratio(a: fxx, b: fxx) -> fxx {
     if a > b && a > 0. {
         sqrt_sigmoid(a)
     } else if b > a && b > 0. {
@@ -545,7 +535,7 @@ fn two_relus_to_ratio(a: f32, b: f32) -> f32 {
 impl CarInput {
     pub const SIZE: usize = 6;
 
-    pub fn from_f32(input: &[f32]) -> CarInput {
+    pub fn from_fxx(input: &[fxx]) -> CarInput {
         debug_assert_eq!(input.len(), Self::SIZE);
         CarInput {
             brake: sqrt_sigmoid(input[0]).max(0.),
@@ -559,7 +549,7 @@ impl CarInput {
 impl Car {
     pub fn process_input(&mut self, input: &CarInput, params: &PhysicsParameters) {
         if input.brake == 0. {
-            self.center += (self.from_local_coordinates(pos2(1., 0.)) - self.center)
+            self.center += (self.from_local_coordinates(vecx2(1., 0.)) - self.center)
                 * 10.0
                 * input.acceleration
                 * params.simple_physics_ratio;
@@ -590,47 +580,47 @@ impl Car {
         self.update_cache();
     }
 
-    pub fn move_forward(&mut self, ratio: f32) {
+    pub fn move_forward(&mut self, ratio: fxx) {
         for pos in &self.up_wheels {
             self.wheels[*pos].action = WheelAction::AccelerationForward(ratio);
         }
     }
 
-    pub fn move_backwards(&mut self, ratio: f32) {
+    pub fn move_backwards(&mut self, ratio: fxx) {
         for pos in &self.up_wheels {
             self.wheels[*pos].action = WheelAction::AccelerationBackward(ratio);
         }
     }
 
-    pub fn brake(&mut self, ratio: f32, params: &PhysicsParameters) {
+    pub fn brake(&mut self, ratio: fxx, params: &PhysicsParameters) {
         for pos in &self.up_wheels {
             self.wheels[*pos].action = WheelAction::Braking(ratio);
         }
     }
 
-    pub fn turn_left(&mut self, ratio: f32, params: &PhysicsParameters) {
+    pub fn turn_left(&mut self, ratio: fxx, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
             self.wheels[*pos].angle_speed = -params.wheel_turn_per_time * ratio;
         }
     }
 
-    pub fn turn_right(&mut self, ratio: f32, params: &PhysicsParameters) {
+    pub fn turn_right(&mut self, ratio: fxx, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
             self.wheels[*pos].angle_speed = params.wheel_turn_per_time * ratio;
         }
     }
 
-    pub fn remove_turns(&mut self, ratio: f32, params: &PhysicsParameters) {
+    pub fn remove_turns(&mut self, ratio: fxx, params: &PhysicsParameters) {
         for pos in &self.rotated_wheels {
             self.wheels[*pos].remove_turns = params.wheel_turn_per_time * 5. * ratio;
         }
     }
 
     pub fn reset(&mut self) {
-        self.speed = vec2(0., 0.);
+        self.speed = vecx2(0., 0.);
         self.angle_speed = 0.;
         self.angle = 0.;
-        self.center = pos2(50., 600.);
+        self.center = vecx2(50., 600.);
         for pos in &self.rotated_wheels {
             self.wheels[*pos].angle = 0.;
         }
@@ -657,12 +647,15 @@ impl Car {
         painter.add(Shape::closed_line(
             self.get_points()
                 .into_iter()
-                .map(|p| to_screen.transform_pos(p))
+                .map(|p| to_screen.transform_pos(p.into()))
                 .collect(),
             Stroke::new(2.0, Color32::from_rgb(0, 128, 128)),
         ));
         painter.extend(self.get_wheels().into_iter().map(|p| Shape::LineSegment {
-            points: [to_screen.transform_pos(p.0), to_screen.transform_pos(p.1)],
+            points: [
+                to_screen.transform_pos(p.0.into()),
+                to_screen.transform_pos(p.1.into()),
+            ],
             stroke: Stroke::new(2.0, Color32::from_rgb(128, 0, 128)).into(),
         }));
     }
@@ -677,9 +670,9 @@ impl Car {
         for (pos, dir) in &self.forces {
             painter.add(Shape::LineSegment {
                 points: [
-                    to_screen.transform_pos(*pos),
+                    to_screen.transform_pos(pos.into()),
                     to_screen.transform_pos(
-                        *pos + *dir * params_phys.time * params.force_draw_multiplier,
+                        (*pos + *dir * params_phys.time * params.force_draw_multiplier).into(),
                     ),
                 ],
                 stroke: Stroke::new(1.0, Color32::from_rgb(0, 0, 0)).into(),
@@ -687,31 +680,31 @@ impl Car {
         }
     }
 
-    pub fn get_center(&self) -> Pos2 {
+    pub fn get_center(&self) -> Vecx2 {
         self.center
     }
 }
 
 pub struct InternalCarValues {
-    pub local_speed: Vec2,
-    pub local_acceleration: Vec2,
-    pub angle_acceleration: f32,
-    pub angle_speed: f32,
-    pub wheel_angle: f32,
+    pub local_speed: Vecx2,
+    pub local_acceleration: Vecx2,
+    pub angle_acceleration: fxx,
+    pub angle_speed: fxx,
+    pub wheel_angle: fxx,
 }
 
 impl InternalCarValues {
     pub const SIZE: usize = 10;
 
-    pub fn speed_angle(&self) -> f32 {
+    pub fn speed_angle(&self) -> fxx {
         self.local_speed.y.atan2(self.local_speed.x)
     }
 
-    pub fn acceleration_angle(&self) -> f32 {
+    pub fn acceleration_angle(&self) -> fxx {
         self.local_acceleration.y.atan2(self.local_speed.x)
     }
 
-    pub fn to_f32(&self) -> [f32; Self::SIZE] {
+    pub fn to_fxx(&self) -> [fxx; Self::SIZE] {
         [
             self.speed_angle().sin(),
             self.speed_angle().cos(),
@@ -729,37 +722,37 @@ impl InternalCarValues {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Wall {
-    pub center: Pos2,
-    pub size: Vec2,
-    pub angle_sin: f32,
-    pub angle_cos: f32,
+    pub center: Vecx2,
+    pub size: Vecx2,
+    pub angle_sin: fxx,
+    pub angle_cos: fxx,
 }
 
 impl Default for Wall {
     fn default() -> Self {
-        Self::new(pos2(500., 500.), vec2(50., 1500.) / 2., 0.)
+        Self::new(vecx2(500., 500.), vecx2(50., 1500.) / 2., 0.)
     }
 }
 
-pub fn walls_from_points(points: impl Iterator<Item = Pos2> + Clone) -> Vec<Wall> {
+pub fn walls_from_points(points: impl Iterator<Item = Vecx2> + Clone) -> Vec<Wall> {
     pairs(points)
         .map(|(a, b)| {
-            let center = (a + b.to_vec2()) / 2.;
+            let center = (a + b) / 2.;
             let dir = b - a;
-            let angle = dir.y.atan2(dir.x) + TAU / 4.;
-            let size = vec2(25., dir.length() / 2. + 30.);
+            let angle = dir.y.atan2(dir.x) + TAUx / 4.;
+            let size = vecx2(25., dir.length() / 2. + 30.);
             Wall::new(center, size, angle)
         })
         .collect()
 }
 
-pub fn rewards_from_points(points: impl Iterator<Item = Pos2> + Clone) -> Vec<Reward> {
+pub fn rewards_from_points(points: impl Iterator<Item = Vecx2> + Clone) -> Vec<Reward> {
     points.map(|a| Reward::new(a)).collect()
 }
 
 // todo: сделать оптимизацию чтобы не считать синусы и косинусы постоянно
 impl Wall {
-    pub fn new(center: Pos2, size: Vec2, angle: f32) -> Self {
+    pub fn new(center: Vecx2, size: Vecx2, angle: fxx) -> Self {
         Self {
             center,
             size,
@@ -769,42 +762,37 @@ impl Wall {
     }
 
     #[inline(always)]
-    pub fn to_local_coordinates(&self, pos: Pos2) -> Pos2 {
-        rotate_around_origin_optimized(
-            (pos - self.center).to_pos2(),
-            -self.angle_sin,
-            self.angle_cos,
-        )
+    pub fn to_local_coordinates(&self, pos: Vecx2) -> Vecx2 {
+        rotate_around_origin_optimized((pos - self.center), -self.angle_sin, self.angle_cos)
     }
 
     #[allow(clippy::wrong_self_convention)]
     #[inline(always)]
-    pub fn from_local_coordinates(&self, pos: Pos2) -> Pos2 {
-        rotate_around_origin_optimized(pos, self.angle_sin, self.angle_cos) + self.center.to_vec2()
+    pub fn from_local_coordinates(&self, pos: Vecx2) -> Vecx2 {
+        rotate_around_origin_optimized(pos, self.angle_sin, self.angle_cos) + self.center
     }
 
-    pub fn is_inside(&self, pos: Pos2) -> bool {
+    pub fn is_inside(&self, pos: Vecx2) -> bool {
         let pos = self.to_local_coordinates(pos);
         pos.x.abs() < self.size.x && pos.y.abs() < self.size.y
     }
 
-    pub fn outer_force(&self, pos: Pos2) -> Vec2 {
+    pub fn outer_force(&self, pos: Vecx2) -> Vecx2 {
         let xf = self.to_local_coordinates(pos).x / self.size.x;
         rotate_around_origin_optimized(
-            (vec2(1. + (1. - xf.abs()), 0.) * xf.signum()).to_pos2(),
+            (vecx2(1. + (1. - xf.abs()), 0.) * xf.signum()),
             self.angle_sin,
             self.angle_cos,
         )
-        .to_vec2()
     }
 
     #[inline(always)]
-    pub fn get_points(&self) -> [Pos2; 4] {
+    pub fn get_points(&self) -> [Vecx2; 4] {
         [
-            self.from_local_coordinates(pos2(-self.size.x, -self.size.y)),
-            self.from_local_coordinates(pos2(self.size.x, -self.size.y)),
-            self.from_local_coordinates(pos2(self.size.x, self.size.y)),
-            self.from_local_coordinates(pos2(-self.size.x, self.size.y)),
+            self.from_local_coordinates(vecx2(-self.size.x, -self.size.y)),
+            self.from_local_coordinates(vecx2(self.size.x, -self.size.y)),
+            self.from_local_coordinates(vecx2(self.size.x, self.size.y)),
+            self.from_local_coordinates(vecx2(-self.size.x, self.size.y)),
         ]
     }
 
@@ -837,7 +825,7 @@ impl Wall {
         ui.end_row();
 
         ui.label("Thickness:");
-        egui_f32(ui, &mut self.size.x);
+        egui_fxx(ui, &mut self.size.x);
         ui.end_row();
 
         ui.label("Angle:");
@@ -845,16 +833,16 @@ impl Wall {
         ui.end_row();
     }
 
-    pub fn intersect_ray(&self, origin: Pos2, dir_pos: Pos2) -> Option<f32> {
+    pub fn intersect_ray(&self, origin: Vecx2, dir_pos: Vecx2) -> Option<fxx> {
         let o = self.to_local_coordinates(origin);
         let d = self.to_local_coordinates(dir_pos) - o;
         let size = self.size;
 
-        let mut t_min = f32::NEG_INFINITY;
-        let mut t_max = f32::INFINITY;
+        let mut t_min = fxx::NEG_INFINITY;
+        let mut t_max = fxx::INFINITY;
 
         {
-            if d.x.abs() > f32::EPSILON {
+            if d.x.abs() > fxx::EPSILON {
                 let t1 = (-size.x - o.x) / d.x;
                 let t2 = (size.x - o.x) / d.x;
 
@@ -868,7 +856,7 @@ impl Wall {
         }
 
         {
-            if d.y.abs() > f32::EPSILON {
+            if d.y.abs() > fxx::EPSILON {
                 let t1 = (-size.y - o.y) / d.y;
                 let t2 = (size.y - o.y) / d.y;
 
@@ -909,11 +897,11 @@ impl Wall {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 pub struct Reward {
-    pub center: Pos2,
+    pub center: Vecx2,
 }
 
 impl Reward {
-    pub fn new(center: Pos2) -> Self {
+    pub fn new(center: Vecx2) -> Self {
         Self { center }
     }
 
@@ -941,7 +929,7 @@ impl Reward {
 impl Default for Reward {
     fn default() -> Self {
         Self {
-            center: pos2(500., 500.),
+            center: vecx2(500., 500.),
         }
     }
 }

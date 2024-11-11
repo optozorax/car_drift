@@ -1,11 +1,7 @@
-use crate::math::deg2rad;
-use crate::math::rad2deg;
-
+use crate::math::*;
 use egui::DragValue;
-
-use egui::Ui;
-
 use egui::Slider;
+use egui::Ui;
 
 pub fn pairs<U, T: Iterator<Item = U> + Clone>(t: T) -> impl Iterator<Item = (U, U)> {
     t.clone().zip(t.skip(1))
@@ -36,18 +32,18 @@ impl<T> AnyOrBothWith for Option<T> {
     }
 }
 
-pub fn egui_angle(ui: &mut Ui, angle: &mut f32) {
+pub fn egui_angle(ui: &mut Ui, angle: &mut fxx) {
     let mut current = rad2deg(*angle);
     let previous = current;
     ui.add(
         DragValue::from_get_set(|v| {
             if let Some(v) = v {
                 if v > 360. {
-                    current = (v % 360.) as f32;
+                    current = (v % 360.) as fxx;
                 } else if v < 0. {
-                    current = (360. + (v % 360.)) as f32;
+                    current = (360. + (v % 360.)) as fxx;
                 } else {
-                    current = v as f32;
+                    current = v as fxx;
                 }
             }
             current.into()
@@ -60,7 +56,7 @@ pub fn egui_angle(ui: &mut Ui, angle: &mut f32) {
     }
 }
 
-pub fn egui_0_1(ui: &mut Ui, value: &mut f32) {
+pub fn egui_0_1(ui: &mut Ui, value: &mut fxx) {
     ui.add(
         Slider::new(value, 0.0..=1.0)
             .clamp_to_range(true)
@@ -69,7 +65,7 @@ pub fn egui_0_1(ui: &mut Ui, value: &mut f32) {
     );
 }
 
-pub fn egui_f32_positive(ui: &mut Ui, value: &mut f32) {
+pub fn egui_fxx_positive(ui: &mut Ui, value: &mut fxx) {
     ui.add(
         DragValue::new(value)
             .speed(0.1)
@@ -79,7 +75,7 @@ pub fn egui_f32_positive(ui: &mut Ui, value: &mut f32) {
     );
 }
 
-pub fn egui_f32(ui: &mut Ui, value: &mut f32) {
+pub fn egui_fxx(ui: &mut Ui, value: &mut fxx) {
     ui.add(
         DragValue::new(value)
             .speed(0.1)
@@ -95,11 +91,11 @@ pub fn egui_usize(ui: &mut Ui, value: &mut usize) {
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct InterfaceParameters {
-    pub drift_starts_at: f32,
-    pub force_draw_multiplier: f32,
-    pub plot_size: f32,
-    pub canvas_size: f32,
-    pub view_size: f32,
+    pub drift_starts_at: fxx,
+    pub force_draw_multiplier: fxx,
+    pub plot_size: fxx,
+    pub canvas_size: fxx,
+    pub view_size: fxx,
     pub graph_points_size_limit: usize,
     pub show_dirs: bool,
     pub simulations_per_frame: usize,
@@ -133,11 +129,11 @@ impl InterfaceParameters {
         ui.end_row();
 
         ui.label("Force draw mul:");
-        egui_f32_positive(ui, &mut self.force_draw_multiplier);
+        egui_fxx_positive(ui, &mut self.force_draw_multiplier);
         ui.end_row();
 
         ui.label("Plot size:");
-        egui_f32_positive(ui, &mut self.plot_size);
+        egui_fxx_positive(ui, &mut self.plot_size);
         ui.end_row();
 
         ui.label("Canvas size:");

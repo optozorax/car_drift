@@ -9,10 +9,10 @@ use std::ops::Neg;
 use std::ops::Sub;
 use std::ops::SubAssign;
 
-pub type fxx = f64;
-pub const PIx: fxx = std::f64::consts::PI;
-pub const TAUx: fxx = std::f64::consts::TAU;
-pub const Ex: fxx = std::f64::consts::E;
+pub type fxx = f32;
+pub const PIx: fxx = std::f32::consts::PI;
+pub const TAUx: fxx = std::f32::consts::TAU;
+pub const Ex: fxx = std::f32::consts::E;
 
 #[derive(Clone, Copy, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Vecx2 {

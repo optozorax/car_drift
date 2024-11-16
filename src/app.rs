@@ -169,36 +169,36 @@ impl Default for TemplateApp {
         // params_sim.nn.use_ranking_network = true;
         // // params_sim.simulation_stop_penalty.value = 0.1;
         // params_sim.nn.ranking_hidden_layers = vec![10, 5];
-        params_sim.eval_add_other_physics = vec![
-            PhysicsPatch {
-                traction: Some(0.15),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                traction: Some(0.5),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                traction: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                friction_coef: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                friction_coef: Some(0.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                acceleration_ratio: Some(1.0),
-                ..PhysicsPatch::default()
-            },
-            PhysicsPatch {
-                acceleration_ratio: Some(0.6),
-                ..PhysicsPatch::default()
-            },
-        ];
+        // params_sim.eval_add_other_physics = vec![
+        //     PhysicsPatch {
+        //         traction: Some(0.15),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(0.5),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         traction: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         friction_coef: Some(0.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         acceleration_ratio: Some(1.0),
+        //         ..PhysicsPatch::default()
+        //     },
+        //     PhysicsPatch {
+        //         acceleration_ratio: Some(0.6),
+        //         ..PhysicsPatch::default()
+        //     },
+        // ];
 
         params_sim.simulation_simple_physics = 0.0;
         params_sim.simulation_stop_penalty.value = 50.;
@@ -227,6 +227,13 @@ impl Default for TemplateApp {
         params_sim.nn.ranking_hidden_layers =
             vec![LayerDescription::new(10, ActivationFunction::SqrtSigmoid)];
 
+        let mut params_phys: PhysicsParameters = Default::default();
+        params_phys.traction_coefficient = 1.0;
+        params_phys.friction_coefficient = 0.0;
+        params_phys.acceleration_ratio = 1.0;
+
+        params_sim.nn.rank_run_cmaes = true;
+
         Self {
             rng: StdRng::seed_from_u64(42),
 
@@ -236,7 +243,7 @@ impl Default for TemplateApp {
             drifts: vec![Default::default(); 2],
 
             params_intr: Default::default(),
-            params_phys: Default::default(),
+            params_phys,
             params_sim: params_sim.clone(),
 
             points: track_complex().1,
@@ -915,6 +922,7 @@ impl eframe::App for TemplateApp {
                                                         internals,
                                                         &self.params_sim,
                                                         &self.params_phys,
+                                                        None,
                                                     )
                                                     .to_owned(),
                                                 input_arr.to_vec(),

@@ -987,46 +987,46 @@ def draw_graph(datas, title, filename, skip_individuals=False, only_complex_trac
 #     skip_individuals=True,
 # )
 
-draw_graph(
-    [
-        {
-            "data": read_json_file("./hard2_default.json"),
-            "name": "default (regression)",
-            # "alpha": 0.5,
-            "color": colors[0],
-        },
-        {
-            "data": read_json_file("./hard2_discrete.json"),
-            "name": "classification of 9 actions",
-            # "alpha": 0.5,
-            "color": colors[1],
-        },
-        # {
-        #     "data": read_json_file("./hard2_ranker_physics.json"),
-        #     "name": "ranker with physics",
-        #     # "alpha": 0.5,
-        #     "color": colors[2],
-        # },
-        {
-            "data": read_json_file("./hard2_ranker_no_physics.json"),
-            "name": "classification/scoring using EBM",
-            # "alpha": 0.5,
-            "color": colors[2],
-        },
-        # {
-        #     "data": read_json_file("./hard2_ranker_no_physics_to_zero.json"),
-        #     "name": "ranker no physics, to zero",
-        #     # "alpha": 0.5,
-        #     "color": colors[4],
-        # },
+# draw_graph(
+#     [
+#         {
+#             "data": read_json_file("./hard2_default.json"),
+#             "name": "default (regression)",
+#             # "alpha": 0.5,
+#             "color": colors[0],
+#         },
+#         {
+#             "data": read_json_file("./hard2_discrete.json"),
+#             "name": "classification of 9 actions",
+#             # "alpha": 0.5,
+#             "color": colors[1],
+#         },
+#         # {
+#         #     "data": read_json_file("./hard2_ranker_physics.json"),
+#         #     "name": "ranker with physics",
+#         #     # "alpha": 0.5,
+#         #     "color": colors[2],
+#         # },
+#         {
+#             "data": read_json_file("./hard2_ranker_no_physics.json"),
+#             "name": "classification/scoring using EBM",
+#             # "alpha": 0.5,
+#             "color": colors[2],
+#         },
+#         # {
+#         #     "data": read_json_file("./hard2_ranker_no_physics_to_zero.json"),
+#         #     "name": "ranker no physics, to zero",
+#         #     # "alpha": 0.5,
+#         #     "color": colors[4],
+#         # },
         
-    ],
-    "New approaches to neural network: EBM and classification instead of regression",
-    "_ranker_discrete_hard_physics_twitter.png",
-    skip_individuals=True,
-    only_complex_track=True,
-    disable_percentiles=True,
-)
+#     ],
+#     "New approaches to neural network: EBM and classification instead of regression",
+#     "_ranker_discrete_hard_physics_twitter.png",
+#     skip_individuals=True,
+#     only_complex_track=True,
+#     disable_percentiles=True,
+# )
 
 # draw_graph(
 #     [
@@ -1092,14 +1092,125 @@ draw_graph(
 #     disable_percentiles=True,
 # )
 
+draw_graph(
+    [
+        {
+            "data": read_json_file("./height_1.json"),
+            "name": "default",
+            "alpha": 0.5,
+            "color": colors[0],
+        },
+        {
+            "data": read_json_file("./height_2.json"),
+            "name": "height 2",
+            "alpha": 0.5,
+            "color": colors[1],
+        },
+        {
+            "data": read_json_file("./height_3.json"),
+            "name": "height 3",
+            "alpha": 0.5,
+            "color": colors[2],
+        },
+        # {
+        #     "data": read_json_file("./height_2_start.json"),
+        #     "name": "height 2 start",
+        #     "alpha": 0.5,
+        #     "color": colors[3],
+        # },
+        # {
+        #     "data": read_json_file("./height_3_start.json"),
+        #     "name": "height 3 start",
+        #     "alpha": 0.5,
+        #     "color": colors[4],
+        # },
+        {
+            "data": read_json_file("./height_1_width_2.json"),
+            "name": "width 2",
+            "alpha": 0.5,
+            "color": colors[5],
+        },
+        {
+            "data": read_json_file("./height_1_width_3.json"),
+            "name": "width 3",
+            "alpha": 0.5,
+            "color": colors[6],
+        },
+        {
+            "data": read_json_file("./height_1_size_20.json"),
+            "name": "size 20",
+            "alpha": 0.5,
+            "color": colors[7],
+        },
+        {
+            "data": read_json_file("./height_1_size_30.json"),
+            "name": "size 30",
+            "alpha": 0.5,
+            "color": colors[8],
+        },
+    ],
+    "Height vs width vs size",
+    "_height_width_size.png",
+    skip_individuals=True,
+    only_complex_track=True,
+    disable_percentiles=True,
+)
+
+draw_graph(
+    [
+        {
+            "data": read_json_file("./height_1.json"),
+            "name": "default",
+            "alpha": 0.5,
+            "color": colors[0],
+        },
+        {
+            "data": read_json_file("./height_2_opt.json"),
+            "name": "height 2",
+            "alpha": 0.5,
+            "color": colors[1],
+        },
+        {
+            "data": read_json_file("./height_3_width_2_opt.json"),
+            "name": "height 3",
+            "alpha": 0.5,
+            "color": colors[2],
+        },
+        {
+            "data": read_json_file("./height_1_width_2_opt.json"),
+            "name": "width 2",
+            "alpha": 0.5,
+            "color": colors[3],
+        },
+        {
+            "data": read_json_file("./height_1_width_3_opt.json"),
+            "name": "width 3",
+            "alpha": 0.5,
+            "color": colors[4],
+        },
+        {
+            "data": read_json_file("./height_1_width_6_opt.json"),
+            "name": "width 6",
+            "alpha": 0.5,
+            "color": colors[5],
+        },
+    ],
+    "Height vs width vs size, same parameters count",
+    "_height_width_size_opt.png",
+    skip_individuals=True,
+    only_complex_track=True,
+    disable_percentiles=True,
+)
+
 # data_default = read_json_file("./default.json")
 # data_2w = read_json_file("./second_way.json")
 # data_nn2 = read_json_file("./nn2_default.json")
-data_default = read_json_file("./hard2_default.json")
+data_default = read_json_file("./height_1.json")
 # data_nn_restart = read_json_file("./nn_restart.json")
 for file_name in json_files:
-    if not file_name.startswith("_hard2_"):
+    if not file_name.startswith("height_"):
         continue
+    print(f"Start for {file_name}")
     file_path = os.path.join('.', file_name)
     data = read_json_file(file_path)
     draw_graph(

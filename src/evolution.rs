@@ -93,8 +93,13 @@ pub struct NnParameters {
     pub ranking_hidden_layers: Vec<LayerDescription>,
     pub rank_without_physics: bool,
     pub rank_close_to_zero: bool,
+    pub rank_run_cmaes: bool,
 
     pub output_discrete_action: bool,
+
+    pub output_height: usize,
+
+    pub pass_current_track_embedding: Option<Vec<fxx>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Default)]
@@ -181,6 +186,9 @@ pub struct SimulationParameters {
     pub evolution_distance_to_solution: f64,
     pub evolution_simple_add_mid_start: bool,
     pub evolution_start_input_range: fxx,
+    pub evolution_sub_generations: usize,
+    pub evolution_sub_evolutions: usize,
+    pub evolution_sub_iterations: usize,
 
     pub eval_skip_passed_tracks: bool,
     pub eval_add_min_distance: bool,
@@ -193,6 +201,9 @@ pub struct SimulationParameters {
 
     pub evolve_simple_physics: bool,
     pub hard_physics_reward: Clamped,
+
+    pub evolve_current_track_embedding: bool,
+    pub current_track_current_params: Option<Vec<fxx>>,
 
     pub nn: NnParameters,
 }
@@ -262,38 +273,30 @@ impl NnParameters {
     const POSSIBLE_ACTIONS_COUNT: usize = POSSIBLE_ACTIONS.len();
     const PHYSICS_COEFS: usize = 4;
 
-    pub fn get_ranking_input_size(&self) -> usize {
-        if self.rank_without_physics {
-            Self::CAR_INPUT_SIZE + self.dirs_size * 2 + Self::CAR_OUTPUT_SIZE_CONVERTED
-        } else {
-            Self::CAR_INPUT_SIZE * 2 + self.dirs_size * 3 + Self::CAR_OUTPUT_SIZE_CONVERTED
-        }
-    }
-
     pub fn get_total_input_neurons(&self) -> usize {
-        if self.use_ranking_network {
-            self.get_ranking_input_size()
-        } else {
-            self.pass_time as usize
-                + self.pass_distance as usize
-                + self.pass_dpenalty as usize
-                + self.pass_dirs as usize
-                    * if self.use_dirs_autoencoder {
-                        self.autoencoder_exits
-                    } else {
-                        self.dirs_size
-                    }
-                + self.pass_internals as usize * Self::CAR_INPUT_SIZE
-                + self.pass_next_size
-                + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
-                + self.pass_simple_physics_value as usize
-                + self.pass_current_track as usize * self.max_tracks
-                + self.pass_dirs_diff as usize * self.dirs_size
-                + self.pass_time_mods.len()
-                + self.pass_current_segment as usize * self.max_segments * self.max_tracks
-                + self.pass_dirs_second_layer as usize * self.dirs_size
-                + self.pass_current_physics as usize * Self::PHYSICS_COEFS
-        }
+        self.pass_time as usize
+            + self.pass_distance as usize
+            + self.pass_dpenalty as usize
+            + self.pass_dirs as usize
+                * if self.use_dirs_autoencoder {
+                    self.autoencoder_exits
+                } else {
+                    self.dirs_size
+                }
+            + self.pass_internals as usize * Self::CAR_INPUT_SIZE
+            + self.pass_next_size
+            + self.pass_prev_output as usize * Self::CAR_OUTPUT_SIZE
+            + self.pass_simple_physics_value as usize
+            + self.pass_current_track as usize * self.max_tracks
+            + self.pass_dirs_diff as usize * self.dirs_size
+            + self.pass_time_mods.len()
+            + self.pass_current_segment as usize * self.max_segments * self.max_tracks
+            + self.pass_dirs_second_layer as usize * self.dirs_size
+            + self.pass_current_physics as usize * Self::PHYSICS_COEFS
+            + self.use_ranking_network as usize
+                * (Self::CAR_OUTPUT_SIZE_CONVERTED
+                    + (!self.rank_without_physics) as usize
+                        * (Self::CAR_INPUT_SIZE + self.dirs_size * 2))
     }
 
     pub fn get_total_output_neurons(&self) -> usize {
@@ -312,15 +315,19 @@ impl NnParameters {
         if self.use_ranking_network {
             std::iter::once(LayerDescription::none(self.get_total_input_neurons()))
                 .chain(self.ranking_hidden_layers.iter().copied())
-                .chain(std::iter::once(LayerDescription::none(
+                .chain(std::iter::once(LayerDescription::new_height(
                     self.get_total_output_neurons(),
+                    self.output_height,
+                    ActivationFunction::None,
                 )))
                 .collect()
         } else {
             std::iter::once(LayerDescription::none(self.get_total_input_neurons()))
                 .chain(self.hidden_layers.iter().copied())
-                .chain(std::iter::once(LayerDescription::none(
+                .chain(std::iter::once(LayerDescription::new_height(
                     self.get_total_output_neurons(),
+                    self.output_height,
+                    ActivationFunction::None,
                 )))
                 .collect()
         }
@@ -1377,10 +1384,12 @@ impl RewardPathProcessor {
     }
 }
 
+#[inline(always)]
 fn convert_dir(params: &NnParameters, intersection: Option<fxx>) -> fxx {
     if params.inv_distance {
         intersection
-            .map(|x| params.inv_distance_coef / (x + 1.).powf(params.inv_distance_pow))
+            // .map(|x| params.inv_distance_coef / (x + 1.).powf(params.inv_distance_pow))
+            .map(|x| params.inv_distance_coef / (x + 1.).sqrt())
             .unwrap_or(0.)
     } else {
         intersection.map(|x| x.max(1000.)).unwrap_or(1000.)
@@ -1487,9 +1496,14 @@ pub struct NnProcessor {
     output_diff_loss: fxx,
     output_regularization_loss: fxx,
 
+    next_dirs: Vec<Option<fxx>>,
+    next_internals: InternalCarValues,
+
     current_track: usize,
 
     nn_autoencoder: NnProcessorAutoencoder,
+
+    prev_action: CarInput,
 }
 
 pub struct SimulationVars<'a> {
@@ -1570,7 +1584,10 @@ impl NnProcessor {
             output_diff_loss: 0.,
             output_regularization_loss: 0.,
             current_track,
-            nn_autoencoder: NnProcessorAutoencoder::new_zeros(nn_params),
+            nn_autoencoder: NnProcessorAutoencoder::new_zeros(nn_params.clone()),
+            next_dirs: vec![None; nn_params.dirs_size],
+            next_internals: InternalCarValues::default(),
+            prev_action: Default::default(),
         }
     }
 
@@ -1596,10 +1613,13 @@ impl NnProcessor {
             current_track,
             nn_autoencoder: if nn_params.use_dirs_autoencoder {
                 // NnProcessorAutoencoder::new(params_other, nn_params)
-                NnProcessorAutoencoder::new(&BEST_AUTOENCODER_21_10_10_10_5, nn_params)
+                NnProcessorAutoencoder::new(&BEST_AUTOENCODER_21_10_10_10_5, nn_params.clone())
             } else {
-                NnProcessorAutoencoder::new_zeros(nn_params)
+                NnProcessorAutoencoder::new_zeros(nn_params.clone())
             },
+            next_dirs: vec![None; nn_params.dirs_size],
+            next_internals: InternalCarValues::default(),
+            prev_action: Default::default(),
         }
     }
 
@@ -1614,6 +1634,7 @@ impl NnProcessor {
         internals: &InternalCarValues,
         params_sim: &SimulationParameters,
         params_phys: &PhysicsParameters,
+        action: Option<CarInput>,
     ) -> &[fxx] {
         let mut input_values_iter = self.input_values.iter_mut();
 
@@ -1683,8 +1704,14 @@ impl NnProcessor {
         }
 
         if self.params.pass_current_track {
-            for i in 0..self.params.max_tracks {
-                *input_values_iter.next().unwrap() = (i == self.current_track) as usize as fxx;
+            if let Some(embedding) = &params_sim.nn.pass_current_track_embedding {
+                for x in embedding {
+                    *input_values_iter.next().unwrap() = *x;
+                }
+            } else {
+                for i in 0..self.params.max_tracks {
+                    *input_values_iter.next().unwrap() = (i == self.current_track) as usize as fxx;
+                }
             }
         }
 
@@ -1711,6 +1738,27 @@ impl NnProcessor {
             *input_values_iter.next().unwrap() = params_phys.simple_physics_ratio;
         }
 
+        if let Some(action) = action {
+            *input_values_iter.next().unwrap() = action.brake;
+            *input_values_iter.next().unwrap() = action.acceleration;
+            *input_values_iter.next().unwrap() = action.remove_turn;
+            *input_values_iter.next().unwrap() = action.turn;
+        }
+
+        if self.params.use_ranking_network && !self.params.rank_without_physics {
+            for intersection in &self.next_dirs {
+                *input_values_iter.next().unwrap() = convert_dir(&self.params, *intersection);
+            }
+            for (next, current) in self.next_dirs.iter_mut().zip(dirs.iter()) {
+                *input_values_iter.next().unwrap() =
+                    convert_dir(&self.params, *next) - convert_dir(&self.params, *current);
+            }
+
+            for y in &self.next_internals.to_fxx() {
+                *input_values_iter.next().unwrap() = *y;
+            }
+        }
+
         assert!(input_values_iter.next().is_none());
 
         &self.input_values
@@ -1729,91 +1777,193 @@ impl NnProcessor {
         simulation_vars: SimulationVars,
     ) -> CarInput {
         if self.params.use_ranking_network {
-            let result = POSSIBLE_ACTIONS
-                .iter()
-                .map(|action| {
-                    let mut input_values_iter = self.input_values.iter_mut();
+            let prev: CarInput = self.prev_action.clone();
+            let mut eval_action = |action: CarInput| {
+                if !self.params.rank_without_physics {
+                    let mut car = simulation_vars.car.clone();
+                    let walls = &simulation_vars.walls;
+                    let params_phys = &simulation_vars.params_phys;
+                    let precomputed_dirs = &simulation_vars.dirs;
+                    car.process_input(&action, params_phys);
 
-                    for intersection in dirs {
-                        *input_values_iter.next().unwrap() =
-                            convert_dir(&self.params, *intersection);
+                    // physics for one step
+                    car.apply_wheels_force(&mut |_, _, _| {}, params_phys);
+                    for wall in *walls {
+                        car.process_collision(wall, params_phys);
                     }
+                    car.step(params_phys.time, params_phys);
 
-                    for y in &internals.to_fxx() {
-                        *input_values_iter.next().unwrap() = *y;
+                    for ((precomputed_dir, dir), next_dir) in precomputed_dirs
+                        .iter()
+                        .zip(dirs.iter())
+                        .zip(self.next_dirs.iter_mut())
+                    {
+                        let dir_pos = car.from_local_coordinates(*precomputed_dir);
+                        let origin = car.get_center();
+                        let mut intersection = None;
+                        for wall in *walls {
+                            let temp = wall.intersect_ray(origin, dir_pos);
+                            intersection = intersection.any_or_both_with(temp, |a, b| a.min(b));
+                        }
+                        *next_dir = intersection;
                     }
-
-                    *input_values_iter.next().unwrap() = action.brake;
-                    *input_values_iter.next().unwrap() = action.acceleration;
-                    *input_values_iter.next().unwrap() = action.remove_turn;
-                    *input_values_iter.next().unwrap() = action.turn;
-
-                    if self.params.rank_without_physics {
-                        for (prev, current) in self.prev_dirs.iter().zip(dirs.iter()) {
-                            *input_values_iter.next().unwrap() = convert_dir(&self.params, *prev)
-                                - convert_dir(&self.params, *current);
-                        }
-                    } else {
-                        let mut car = simulation_vars.car.clone();
-                        let walls = &simulation_vars.walls;
-                        let params_phys = &simulation_vars.params_phys;
-                        let precomputed_dirs = &simulation_vars.dirs;
-                        car.process_input(action, params_phys);
-
-                        for i in 0..params_phys.steps_per_time {
-                            let time = params_phys.time / params_phys.steps_per_time as fxx;
-                            car.apply_wheels_force(&mut |_, _, _| {}, params_phys);
-                            for wall in *walls {
-                                car.process_collision(wall, params_phys);
-                            }
-                            car.step(time, params_phys);
-                        }
-
-                        for (precomputed_dir, dir) in precomputed_dirs.iter().zip(dirs.iter()) {
-                            let dir_pos = car.from_local_coordinates(*precomputed_dir);
-                            let origin = car.get_center();
-                            let mut intersection = None;
-                            for wall in *walls {
-                                let temp = wall.intersect_ray(origin, dir_pos);
-                                intersection = intersection.any_or_both_with(temp, |a, b| a.min(b));
-                            }
-                            *input_values_iter.next().unwrap() =
-                                convert_dir(&self.params, intersection);
-                            *input_values_iter.next().unwrap() =
-                                convert_dir(&self.params, intersection)
-                                    - convert_dir(&self.params, *dir);
-                        }
-
-                        for y in &car.get_internal_values().to_fxx() {
-                            *input_values_iter.next().unwrap() = *y;
-                        }
-                    }
-
-                    assert!(input_values_iter.next().is_none());
-
-                    let values = self.nn.calc(&self.input_values);
-                    assert!(values.len() == 1);
-
-                    (action, values[0])
-                })
-                .max_by(|(_, value1), (_, value2)| {
-                    if self.params.rank_close_to_zero {
-                        value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
-                    } else {
-                        value1.partial_cmp(value2).unwrap()
-                    }
-                })
-                .unwrap()
-                .0
-                .clone();
-
-            if self.params.rank_without_physics {
-                for (prev, current) in self.prev_dirs.iter_mut().zip(dirs.iter()) {
-                    *prev = *current;
+                    self.next_internals = car.get_internal_values();
                 }
-            }
 
-            return result;
+                self.calc_input_vector(
+                    time_passed,
+                    distance_percent,
+                    dpenalty,
+                    dirs,
+                    dirs_second_layer,
+                    current_segment_fxx,
+                    internals,
+                    params_sim,
+                    simulation_vars.params_phys,
+                    Some(action),
+                );
+                let values = self.nn.calc(&self.input_values);
+                assert!(values.len() == 1);
+
+                values[0].clone()
+            };
+
+            if params_sim.nn.rank_run_cmaes {
+                // let mut best_action = POSSIBLE_ACTIONS[0];
+                // let mut best_action_score = -10000.;
+
+                let (mut best_action, mut best_action_score) = POSSIBLE_ACTIONS
+                    .iter()
+                    .copied()
+                    .map(|action| (action, eval_action(action)))
+                    .max_by(|(_, value1), (_, value2)| {
+                        if params_sim.nn.rank_close_to_zero {
+                            value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
+                        } else {
+                            value1.partial_cmp(value2).unwrap()
+                        }
+                    })
+                    .unwrap();
+
+                let mut test = |action: CarInput| {
+                    let score = eval_action(action);
+                    if score > best_action_score {
+                        best_action = action;
+                        best_action_score = score;
+                    }
+                };
+
+                let dx = 0.1;
+                let dx2 = 0.05;
+
+                test(CarInput::add(prev, [dx, 0., 0., 0.]));
+                test(CarInput::add(prev, [-dx, 0., 0., 0.]));
+                test(CarInput::add(prev, [0., dx, 0., 0.]));
+                test(CarInput::add(prev, [0., -dx, 0., 0.]));
+                test(CarInput::add(prev, [0., 0., dx, 0.]));
+                test(CarInput::add(prev, [0., 0., -dx, 0.]));
+                test(CarInput::add(prev, [0., 0., 0., dx]));
+                test(CarInput::add(prev, [0., 0., 0., -dx]));
+
+                test(CarInput::add(prev, [dx2, 0., 0., 0.]));
+                test(CarInput::add(prev, [-dx2, 0., 0., 0.]));
+                test(CarInput::add(prev, [0., dx2, 0., 0.]));
+                test(CarInput::add(prev, [0., -dx2, 0., 0.]));
+                test(CarInput::add(prev, [0., 0., dx2, 0.]));
+                test(CarInput::add(prev, [0., 0., -dx2, 0.]));
+                test(CarInput::add(prev, [0., 0., 0., dx2]));
+                test(CarInput::add(prev, [0., 0., 0., -dx2]));
+
+                // test(CarInput::change(prev, 0., 0));
+                // test(CarInput::change(prev, 1., 0));
+                // test(CarInput::change(prev, 0., 2));
+
+                self.prev_action = best_action;
+
+                return best_action;
+
+                /*
+                let mut best_action = POSSIBLE_ACTIONS[0];
+                let mut best_action_score = -10000.;
+                for a1 in 0..POSSIBLE_ACTIONS.len() {
+                    for a2 in a1..POSSIBLE_ACTIONS.len() {
+                        let a1 = POSSIBLE_ACTIONS[a1];
+                        let a2 = POSSIBLE_ACTIONS[a2];
+                        let n = 5;
+                        for t in (0..=n).map(|t| t as fxx / n as fxx) {
+                            let a = CarInput::lerp(a1, a2, t);
+                            let score = eval_action(a);
+                            if score > best_action_score {
+                                best_action = a;
+                                best_action_score = score;
+                            }
+                        }
+                    }
+                }
+                return best_action;
+                */
+
+                /*
+                let (result, result_score) = POSSIBLE_ACTIONS
+                    .iter()
+                    .map(|action| (action, eval_action(*action)))
+                    .max_by(|(_, value1), (_, value2)| {
+                        if params_sim.nn.rank_close_to_zero {
+                            value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
+                        } else {
+                            value1.partial_cmp(value2).unwrap()
+                        }
+                    })
+                    .unwrap()
+                    .clone();
+
+                let random_input = random_input_by_len(6, 1.);
+                let mut state = cmaes::options::CMAESOptions::new(random_input, 1.)
+                    .population_size(10)
+                    .build(|x: &DVector<f64>| -> f64 {
+                        -eval_action(CarInput::from_fxx(x.as_slice()))
+                    })
+                    .unwrap();
+
+                for pos in 0..30 {
+                    let _ = state.next();
+                    let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
+                    // println!("--- {pos}: {value}");
+                }
+                let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
+
+                // dbg!(result, result_score);
+                // dbg!(CarInput::from_fxx(&point.as_slice()));
+
+                // panic!();
+
+                if -value < result_score {
+                    return *result;
+                } else {
+                    return CarInput::from_fxx(&point.as_slice());
+                }*/
+            } else {
+                let (result, result_score) = POSSIBLE_ACTIONS
+                    .iter()
+                    .map(|action| (action, eval_action(*action)))
+                    .max_by(|(_, value1), (_, value2)| {
+                        if params_sim.nn.rank_close_to_zero {
+                            value1.abs().partial_cmp(&value2.abs()).unwrap().reverse()
+                        } else {
+                            value1.partial_cmp(value2).unwrap()
+                        }
+                    })
+                    .unwrap()
+                    .clone();
+
+                if self.params.rank_without_physics {
+                    for (prev, current) in self.prev_dirs.iter_mut().zip(dirs.iter()) {
+                        *prev = *current;
+                    }
+                }
+
+                return *result;
+            }
         }
 
         self.calc_counts += 1;
@@ -1828,6 +1978,7 @@ impl NnProcessor {
             internals,
             params_sim,
             simulation_vars.params_phys,
+            None,
         );
         let values = self.nn.calc(&self.input_values);
 
@@ -2320,17 +2471,27 @@ pub fn patch_params_sim(params: &[fxx], params_sim: &SimulationParameters) -> Si
     params_sim
 }
 
-pub fn eval_nn(
-    params: &[fxx],
+pub fn eval_nn<'a>(
+    mut params: &'a [fxx],
     params_phys: &PhysicsParameters,
-    params_sim: &SimulationParameters,
+    params_sim: &'a SimulationParameters,
 ) -> Vec<TrackEvaluation> {
+    let old_params = params;
+    if params_sim.evolve_current_track_embedding {
+        params = params_sim.current_track_current_params.as_ref().unwrap();
+    }
+
     let nn_len = params_sim.nn.get_nns_len();
+    // dbg!(params.len(), nn_len);
     let (nn_params, other_params) = params.split_at(nn_len);
     assert_eq!(other_params.len(), OTHER_PARAMS_SIZE);
 
-    let params_sim = patch_params_sim(params, params_sim);
+    let mut params_sim = patch_params_sim(params, params_sim);
     let params_phys = params_sim.patch_physics_parameters(params_phys.clone());
+
+    if params_sim.evolve_current_track_embedding {
+        params_sim.nn.pass_current_track_embedding = Some(old_params.iter().copied().collect());
+    }
 
     let tracks: Vec<Track> = get_all_tracks()
         .into_iter()
@@ -2700,7 +2861,11 @@ pub fn evolve_by_cma_es_custom(
     let nn_sizes = params_sim.nn.get_nn_sizes();
     let nn_len = params_sim.nn.get_nns_len();
     let input_done: Vec<f64> = nn_input.iter().map(|x| *x as f64).collect();
-    assert_eq!(input_done.len(), nn_len + OTHER_PARAMS_SIZE);
+    if params_sim.evolve_current_track_embedding {
+        assert_eq!(input_done.len(), params_sim.nn.max_tracks);
+    } else {
+        assert_eq!(input_done.len(), nn_len + OTHER_PARAMS_SIZE);
+    }
 
     let mut result: Vec<EvolveOutputEachStep> = Default::default();
 
@@ -2716,6 +2881,8 @@ pub fn evolve_by_cma_es_custom(
 
     let mut true_params_sim = SimulationParameters::true_metric(params_sim);
 
+    let now_total = Instant::now();
+
     for pos in 0..generations_count {
         let now = Instant::now();
         if ONE_THREADED {
@@ -2726,7 +2893,9 @@ pub fn evolve_by_cma_es_custom(
         let cmaes::Individual { point, value } = state.overall_best_individual().unwrap();
 
         let nn = from_dvector_to_fxx_vec(&point);
-        true_params_sim = patch_params_sim(&nn, &true_params_sim);
+        if !params_sim.evolve_current_track_embedding {
+            true_params_sim = patch_params_sim(&nn, &true_params_sim);
+        }
 
         let evals = eval_nn(&nn, params_phys, &params_sim);
         let evals_cost = sum_evals(&evals, params_sim, true);
@@ -2742,7 +2911,11 @@ pub fn evolve_by_cma_es_custom(
         });
 
         if PRINT && (((pos % 10 == 0) && PRINT_EVERY_10) || !PRINT_EVERY_10) {
-            println!("{pos}. {evals_cost}");
+            println!(
+                "{pos}. {evals_cost}, time: {:?}, total time: {:?}",
+                now.elapsed(),
+                now_total.elapsed()
+            );
             if PRINT_EVALS
                 && (((pos % 10 == 0) && PRINT_EVERY_10_ONLY_EVALS) || !PRINT_EVERY_10_ONLY_EVALS)
             {
@@ -3153,8 +3326,13 @@ impl Default for NnParameters {
             ranking_hidden_layers: vec![LayerDescription::relu_best(6)],
             rank_without_physics: false,
             rank_close_to_zero: false,
+            rank_run_cmaes: false,
 
             output_discrete_action: false,
+
+            output_height: 1,
+
+            pass_current_track_embedding: None,
         }
     }
 }
@@ -3218,6 +3396,9 @@ impl Default for SimulationParameters {
             evolution_distance_to_solution: 10.,
             evolution_simple_add_mid_start: false,
             evolution_start_input_range: 10.,
+            evolution_sub_generations: 51,
+            evolution_sub_evolutions: 5,
+            evolution_sub_iterations: 2,
 
             eval_skip_passed_tracks: false,
             eval_add_min_distance: false,
@@ -3230,6 +3411,9 @@ impl Default for SimulationParameters {
 
             evolve_simple_physics: false,
             hard_physics_reward: Clamped::new(10000., 0., 10000.),
+
+            evolve_current_track_embedding: false,
+            current_track_current_params: None,
 
             nn: Default::default(),
         }
@@ -3246,6 +3430,9 @@ impl SimulationParameters {
 
         result.simulation_simple_physics = other.simulation_simple_physics;
         result.evolve_simple_physics = other.evolve_simple_physics;
+
+        result.evolve_current_track_embedding = other.evolve_current_track_embedding;
+        result.current_track_current_params = other.current_track_current_params.clone();
 
         result.nn = other.nn.clone();
 
@@ -3396,6 +3583,75 @@ fn evolve_simple_physics(
     result
 }
 
+fn evolve_many_cmaes(
+    params_sim: &SimulationParameters,
+    params_phys: &PhysicsParameters,
+) -> Vec<EvolveOutputEachStep> {
+    let mut input = random_input(params_sim);
+
+    let mut result = vec![];
+
+    for it in 0..params_sim.evolution_sub_iterations {
+        if PRINT {
+            println!(
+                "Start iteration {it} after {} generations",
+                it * params_sim.evolution_sub_generations
+            );
+        }
+
+        let map_lambda = |_| {
+            let input2 = random_input(params_sim);
+            evolve_by_cma_es_custom(
+                params_sim,
+                params_phys,
+                if it == 0 { &input2 } else { &input },
+                params_sim.evolution_population_size,
+                params_sim.evolution_sub_generations,
+                Some(params_sim.evolution_distance_to_solution),
+                None,
+            )
+        };
+        let mut sub_result: Vec<Vec<EvolveOutputEachStep>> = if ONE_THREADED {
+            (0..params_sim.evolution_sub_evolutions)
+                .into_iter()
+                .map(map_lambda)
+                .collect()
+        } else {
+            (0..params_sim.evolution_sub_evolutions)
+                .into_par_iter()
+                .map(map_lambda)
+                .collect()
+        };
+
+        sub_result.sort_by_key(|x| -(x.last().unwrap().evals_cost * 100000000.) as i64);
+
+        let scores = sub_result
+            .iter()
+            .map(|x| format!("{} ", x.last().unwrap().evals_cost))
+            .collect::<String>();
+        println!("Resulting scores: {}", scores);
+
+        println!(
+            "Using evolution with score {}",
+            sub_result[0].last().unwrap().evals_cost
+        );
+        input = sub_result[0].last().unwrap().nn.clone();
+        result.extend(sub_result.remove(0));
+    }
+
+    result.extend(evolve_by_cma_es_custom(
+        params_sim,
+        params_phys,
+        &input,
+        params_sim.evolution_population_size,
+        params_sim.evolution_generation_count,
+        Some(params_sim.evolution_distance_to_solution),
+        None,
+    ));
+
+    result
+}
+
 fn test_params_sim_evolve_simple(
     params_sim: &SimulationParameters,
     params_phys: &PhysicsParameters,
@@ -3426,10 +3682,17 @@ fn random_input_by_len(len: usize, limit: fxx) -> Vec<fxx> {
 }
 
 fn random_input(params_sim: &SimulationParameters) -> Vec<fxx> {
-    random_input_by_len(
-        params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE,
-        params_sim.evolution_start_input_range,
-    )
+    if params_sim.evolve_current_track_embedding {
+        random_input_by_len(
+            params_sim.nn.max_tracks,
+            params_sim.evolution_start_input_range,
+        )
+    } else {
+        random_input_by_len(
+            params_sim.nn.get_nns_len() + OTHER_PARAMS_SIZE,
+            params_sim.evolution_start_input_range,
+        )
+    }
 }
 
 fn test_params_sim_fn<
@@ -3875,7 +4138,7 @@ fn print_mean_std_of_best_nns(params_sim: &SimulationParameters) {
                 // Collect all values at this matrix position across networks
                 let values: Vec<fxx> = all_nns
                     .iter()
-                    .map(|nn| nn.layers[layer_idx].matrix[i][j])
+                    .map(|nn| nn.layers[layer_idx].stack[0].0[i][j])
                     .collect();
 
                 // Calculate mean
@@ -3899,7 +4162,7 @@ fn print_mean_std_of_best_nns(params_sim: &SimulationParameters) {
             // Collect all values at this bias position across networks
             let values: Vec<fxx> = all_nns
                 .iter()
-                .map(|nn| nn.layers[layer_idx].bias[i])
+                .map(|nn| nn.layers[layer_idx].stack[0].1[i])
                 .collect();
 
             // Calculate mean
@@ -4019,6 +4282,148 @@ fn read_nn_from_file(file_path: &str) -> Vec<fxx> {
     nn.to_optimized().get_values().iter().copied().collect()
 }
 
+fn print_random_evals(values: &[fxx], name: &str) {
+    let upper_mean = values.iter().take(values.len() / 2).sum::<fxx>() / (values.len() / 2) as fxx;
+    let upper_upper_mean =
+        values.iter().take(values.len() / 4).sum::<fxx>() / (values.len() / 4) as fxx;
+    let mean: fxx = values.iter().sum::<fxx>() / values.len() as fxx;
+
+    // Calculate std dev
+    let variance = values.iter().map(|x| (x - mean).powi(2)).sum::<fxx>() / values.len() as fxx;
+    let std_dev = variance.sqrt();
+    println!(
+        "{} finish eval, max: {}, up_up_avg: {}, up_avg: {}, median: {}, avg: {}, std: {}, min: {}",
+        name,
+        values[0],
+        upper_upper_mean,
+        upper_mean,
+        values[values.len() / 2],
+        mean,
+        std_dev,
+        values.last().unwrap()
+    );
+}
+
+fn test_random_nn(
+    params_sim: &SimulationParameters,
+    params_phys: &PhysicsParameters,
+    count: usize,
+    name: &str,
+) -> Vec<fxx> {
+    let now = Instant::now();
+    let mut result = (0..count)
+        .into_par_iter()
+        .map(|_| {
+            sum_evals(
+                &eval_nn(&random_input(params_sim), params_phys, params_sim),
+                params_sim,
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    print_random_evals(&result, name);
+    result
+}
+
+fn test_random_nn_tasks(tasks: Vec<(SimulationParameters, PhysicsParameters, String)>) {
+    let sub_count = 10;
+    let mut results: Vec<(Vec<fxx>, String)> =
+        tasks.iter().map(|x| (vec![], x.2.clone())).collect();
+    let mut iters = 0;
+
+    while true {
+        let now = Instant::now();
+        let x = tasks
+            .iter()
+            .enumerate()
+            .flat_map(|x| std::iter::repeat_n(x, sub_count))
+            .collect::<Vec<(usize, &_)>>();
+        let res = x
+            .into_par_iter()
+            .map(|(i, task)| {
+                (
+                    i,
+                    sum_evals(
+                        &eval_nn(&random_input(&task.0), &task.1, &task.0),
+                        &task.0,
+                        false,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (pos, value) in res {
+            results[pos].0.push(value);
+        }
+        iters += sub_count;
+        println!("Iters: {iters}, time: {:?}", now.elapsed());
+        if iters % 100 == 0 {
+            save_json_to_file(&results, "test_random_nn_tasks.json");
+        }
+        for (values, name) in &mut results {
+            values.sort_by_key(|x| -(x * 100000000.) as i64);
+            print_random_evals(&values, &name);
+        }
+    }
+}
+
+fn test_embedding_evolution(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
+    let mut params_sim = params_sim.clone();
+    let mut params_phys = params_phys.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        5,
+        2,
+        ActivationFunction::ReluLeaky,
+    )];
+    // params_sim.evolution_generation_count = 200;
+    // let res = evolve_many_cmaes(&params_sim, &params_phys);
+    // println!("{:?}", res.last().unwrap().nn);
+
+    #[rustfmt::skip]
+    let params_height_2_5 = vec![0.119349495,-3.3370314,8.188117,-3.4695415,3.7580807,-4.5905695,4.283642,-1.5320683,0.23230632,8.359809,7.2849536,1.845959,-0.13715616,2.2771196,-6.3798757,4.017758,2.6922276,3.4412563,2.4900067,0.912159,-0.9066417,2.444941,3.2749405,7.541415,4.150205,7.801418,-4.0654097,-6.957135,8.761944,-5.8048954,9.182877,8.132027,4.555512,-5.769169,-7.3032546,-2.2061121,-11.986227,-5.684184,-10.199061,-5.632247,-14.223864,-2.472207,-1.5691739,-4.510697,1.0566658,6.640504,-8.595974,2.0541003,-0.23047757,-1.6326048,-4.92943,-2.5280433,-6.435144,-4.508624,-0.44260404,5.7392907,-1.1465448,5.698981,0.44946602,-4.2642183,-0.20023488,-5.382431,-0.5248119,4.339928,-0.8669351,-1.4446303,-0.39193583,-8.698379,2.2501717,14.508048,0.448875,2.6756995,-3.85871,5.9305806,8.575711,7.3668575,6.904132,-0.40820128,0.7256919,-0.021791086,4.3461695,0.12509522,-1.012619,-5.4504156,-3.5402584,12.010007,5.178581,-1.3618578,4.133745,-11.598546,-6.9416986,-5.176188,-4.6296086,-5.4367127,0.75124186,5.3656125,-0.8321573,-3.5651202,0.5870314,6.207178,-3.065962,0.5960432,0.5305346,1.837885,-0.038791105,-0.21607177,-2.1954238,2.6500962,2.6747382,1.4652874,-3.7326531,-3.6828773,-2.465046,8.890892,-3.304544,-5.321601,-2.2307825,0.8933684,0.20600636,-4.3426094,-2.4618645,2.1750705,-1.9527553,-3.8093765,6.8205137,-3.5782883,1.056028,-11.839975,2.1077304,3.6125681,5.9740276,3.0052114,-2.6377437,0.42751536,2.3946242,-0.47611007,4.8539867,5.2361927,-3.0886114,-0.2112547,1.3945447,-0.36830872,2.4248042,-8.128795,0.91315466,3.5615857,-0.48094442,-2.6952767,-0.3052178,4.7811823,4.652936,5.673622,4.0797977,-1.9665672,4.2285423,2.96714,10.254439,4.5040784,2.1425006,7.670646,2.1960583,-3.5987802,-0.33610377,4.168934,13.307642,2.0298493,-3.5554366,-2.1316829,5.734467,3.5925431,2.655953,-0.650269,4.086882,1.9770395,4.092333,-1.2924889,0.33438805,6.3930464,-3.156084,-4.8827505,-0.7087937,-1.4942926,6.0948625,-1.5052718,-3.7958531,-3.875854,4.9067926,1.4644508,7.1519704,-4.304061,-5.241226,6.549418,4.519715,-1.5679336,-6.350689,-5.8968577,11.74602,-6.7543473,7.0575657,9.006419,-4.5079584,-1.9454706,2.807087,2.1773012,4.3797526,1.8980496,-6.1622124,-1.299266,-2.649046,-2.1927745,6.5107255,7.0384803,-2.9410164,-2.28014,-1.7560459,1.1028249,-0.18843122,2.464435,3.3217285,3.1434495,2.6214266,6.3341947,-7.9081593,-0.04150544,-4.1242266,6.7715845,5.941838,-4.976509,7.2420015,-1.9837065,-3.8094175,-1.0660568,1.2203995,-3.4004097,-3.5054488,5.530898,-5.061875,0.8293326,-5.7697887,0.39043346,-9.952448,3.9884675,-0.27707863,-5.463915,-6.700396,-4.521997,2.019349,6.7407804,-9.737096,6.942094,4.788818,8.651283,7.061528,-1.581797,-1.8213662,0.43013522,0.12859605,3.2186425,-3.36246,-3.5010808,0.72677636,1.3117678,-2.3496172,-0.48038465,1.8443133,4.3661795,0.4748574,0.08766378,-1.9051938,-5.003822,-12.488703,-4.7827654,-4.4286184,-4.564455,0.4187228,-6.0528703,-2.3535142,3.5875921,-1.6508317,-0.54687756,2.5417912,9.276207,-2.642241,3.2834482,8.930523,7.973023,1.0934185,6.380989,-1.6268678,-5.01674,-4.7173676,-3.8052597,1.29713,2.0591981,-1.5261639,1.6679429,-3.3505747,6.9319096,5.9274054,-4.5128984,-3.1291792,-0.6582098,-0.93075013,-3.718267,1.8283601,-0.7231333,-1.0843425,-4.294673,-0.8127442,2.9487936,6.0713463,-3.6345556,2.3794184,-4.0034924,-3.9856074,-5.900763,-3.109549,9.563487,-5.137228,-3.6543396,2.2412424,-1.4267049,-0.6323825,2.7747037,-1.5885397,0.9117691,0.3396052,2.8151026,1.8881103,4.8595066,1.7751839,6.6960707,-1.3464928,-0.9652166,4.048216,-2.0243156,-1.4285281,7.812356,-5.1272054,1.9957291,4.237852,3.4873283,1.503098,10.641617,-5.153844,-2.9091077,3.8545976,6.31454,4.847263,-0.17458588,-1.4871696,2.2821653,3.1139522,-1.7553891,-7.4631534,-4.2862105,1.0084041,-4.188551,-2.3822012,2.6855233,1.0916562,0.5867817,3.2681422,4.7087374,6.6238203,0.43120974,0.6498436,-1.0023843,8.291023,5.055137,-1.3004969,-0.73164946,-3.532055,-2.8647172,-7.204693,-4.564884,-5.0832753,4.5621543,-2.6844256,0.025105344,-7.5384603,2.4718623,-1.5267849,-3.9458659,0.7110539,-7.679055,0.85594434,-3.06528,5.212481,4.075789,4.107771,3.0929503,7.37197,5.1579633,2.1763525,0.9556152,3.0857713,-14.113318,-4.6220083,2.4847937,0.069878526,0.7238229,0.70849186,0.7211614,3.338786,8.495504,-2.1733778,-5.228137,8.279004,5.059361,-5.809125,-3.2382872,0.011168835,-3.4655278,1.4017599,4.388701,2.4046042,-1.217465,-5.2560916,0.79020834,-1.9249433,2.7358875,6.3416743,5.3406425,2.5918581,-5.9135,1.29983,-2.723716,-4.4881516,0.9727539,-7.894102,-5.4360394,-5.148819,-3.5462213,3.6390383,-1.8331313,3.430616,0.6351599,3.1434016,-1.8512563,-5.0404344,4.0747986,-1.0101817,-0.39534763,-3.8461063,-6.660609,6.1311674,1.3222232,1.282236,-5.502451,-4.3689337,-0.89233446,3.6846092,3.7671106,4.5108337,4.869756,-2.1767392,-7.893206,-2.5551364,-11.828304,-1.4893004,0.06355321,-2.5991793,-3.5857916,-9.602876,2.792864,2.0699868,-2.7457576,3.7524834,4.454319,7.0314283,-6.8632193,2.5861387,7.4338164,10.47894,-4.003516,0.6419683,0.77395344,-3.670295,7.2725596,-5.1673512,0.7664337,-2.0312927,-7.0395117,-12.192269,-1.8465735,1.5524216,4.2012544,-3.151449,-0.06942288,-1.4670181,-0.8942286,-2.086759,1.6038166,-1.9243929,4.549664,-6.514064,3.6786683,-5.717252,-6.983634,-7.410012,4.993771,3.0693727,5.1231875,-1.4326409,-7.55277,4.7401485,1.574449,-4.8418345,1.3982598,-6.1520348,0.869247,-4.7830753,5.511136,-5.5241337,-1.687061,-0.92732,-3.9450543,0.6705067,6.705333,7.286246,4.0057974,3.5854378,3.8321493,-3.7080975,0.1329218,-2.619697,-7.9856963,-0.78669345,-0.088975854,-1.1264857,-1.6803383,1.4199239,-1.9683131,-3.2140305,-4.1144924,-8.351103,8.138371,-0.34405306,-3.3682902,-2.1285486,-1.1987613,-3.6725311,0.40636635,0.33415893,2.4737008,2.017594,0.5419511,-1.1097065,2.6098692,3.6399724,3.358924,0.91180235,-11.463833,0.036784057,0.7813259,-0.3667,-1.9638706,-4.107756,6.9497724,-1.1491053,3.945374,4.7910275,6.3253894,2.1258624,-0.11555048,0.1614306,3.5182345,3.2682102,7.1912894,4.8007855,-7.208287,0.5422969,2.1723075,-4.3162985,-3.3259246,2.1723986,3.8118093,2.6773283,2.569722,2.986624,3.642972,-2.770624,-5.562629,1.9394944,7.933242,-2.0782845,-6.3533583,0.16114391,-7.0365157,0.011163534,-5.491801,5.871467,7.030134,-7.3166847,0.5077239,3.091303,-6.6071787,-8.0617075,-5.540913,-0.21465576,-0.3630944,1.6808532,-0.9344128,0.9177114,-7.4957647,-2.9267783,5.1421943,-0.8863285,-3.399853,-0.24207826,-6.2304406,1.1456763,-4.4569583,-4.0598884,3.3875318,-2.1196535,6.586943,0.5849515,3.2667267,-0.51980174,-2.3632128,-1.8961834,-6.849103,9.382981,-3.2744179,4.5836244,-1.1430167,-4.509891,-3.0187206,7.0632176,-1.4689548,-10.717147,1.0092841,2.491954,-8.674229,-0.09435558];
+    params_sim.current_track_current_params = Some(params_height_2_5);
+    params_sim.evolve_current_track_embedding = true;
+
+    params_sim.disable_all_tracks();
+    // params_sim.tracks_enable_mirror = true;
+    params_sim.enable_track("complex");
+    // params_phys.traction_coefficient = 0.15;
+    // params_sim.enable_track("bubble_180");
+    // params_sim.enable_track("bubble_straight");
+
+    let res = evolve_by_cma_es_custom(
+        &params_sim,
+        &params_phys,
+        &random_input(&params_sim),
+        20,
+        100,
+        Some(params_sim.evolution_distance_to_solution),
+        None,
+    );
+
+    println!("{:?}", res.last().unwrap().nn);
+}
+
+fn test_different_dirs_init(params_sim: &SimulationParameters, params_phys: &PhysicsParameters) {
+    let mut params_sim = params_sim.clone();
+    params_sim.nn.pass_current_track = false;
+    params_sim.tracks_enable_mirror = true;
+    params_sim.enable_track("straight_45");
+    params_sim.enable_track("loop");
+    params_sim.enable_track("straight_turn");
+    params_sim.enable_track("separation");
+    let mut tasks = vec![];
+    for dirs in (1..50).step_by(2) {
+        params_sim.nn.dirs_size = dirs;
+        tasks.push((
+            params_sim.clone(),
+            params_phys.clone(),
+            format!("dirs_{dirs}"),
+        ));
+    }
+    test_random_nn_tasks(tasks);
+}
+
 pub fn evolution() {
     let mut params_sim = SimulationParameters::default();
     let mut params_phys = PhysicsParameters::default();
@@ -4062,85 +4467,168 @@ pub fn evolution() {
 
     let mut params_sim_copy = params_sim.clone();
 
-    #[rustfmt::skip]
-    let params = vec![-1.0140746,7.969905,3.255649,-0.45773593,-8.814844,5.5313916,2.2310336,-6.857345,0.03863446,-6.8043175,3.8996851,4.1762123,6.342612,8.253213,10.223366,-3.637407,-4.825101,-6.223656,-5.710869,-2.1575553,0.3453375,0.38729206,-0.84449524,4.307528,8.513787,9.111382,5.708905,-5.0000615,5.2223225,-4.882063,-6.8563724,-3.2832754,10.826247,5.1875124,1.0637699,5.1628504,7.831787,1.6877187,2.3491712,10.182303,-2.650052,-5.8988256,2.2731888,-5.933333,-2.4040658,-0.6451996,2.6045537,6.8096733,1.5365217,0.112321965,2.7377155,-6.143689,-0.6136311,2.9335635,4.068984,-2.3936646,4.105215,8.365123,1.4176098,8.74154,7.0931883,-0.4234664,9.790796,-5.3568335,-6.184567,-1.878323,-0.44523206,-4.3636174,-10.265222,11.838661,-3.2664053,-10.227155,-1.1348896,-12.036602,-3.6037822,10.177021,2.8815486,-10.635429,5.409533,1.2621099,6.355703,3.449306,3.7818124,3.4725761,-0.221656,-18.189472,4.8883586,6.5181103,7.976028,2.3536148,-11.689482,-5.211554,-7.1512904,-6.6349115,-3.059728,-8.888863,-3.1679716,5.815808,-6.8705287,-1.28352,-3.3116326,-3.6879137,-3.8458946,4.145627,10.688421,6.8072286,-8.7282295,6.2244353,1.6423159,0.4508205,2.1093874,5.083254,7.8963084,-10.452589,1.5590851,-9.058856,0.2950253,4.867293,-0.22889403,2.3118467,4.435561,1.0126159,1.2630934,0.6034488,-7.261848,-6.456671,-8.173853,-2.5947015,1.6566625,0.8303851,-3.9235418,-3.6188898,-5.6813827,8.366194,2.9604132,-3.100621,-2.343282,7.5686,0.7278174,-12.403346,-7.4190397,-12.375827,-1.6933929,1.2848308,-2.6327226,-6.1778817,-0.69299924,3.7549577,-0.28050584,0.7778191,-3.4546475,-0.70060945,-4.8373885,4.4729676,-3.1355038,7.8780136,3.5531738,8.082677,-2.719097,-1.0375485,5.097316,-1.9870536,-9.435947,5.1853786,0.77007765,0.77070636,-3.4930844,5.965919,3.0085702,-0.71396536,-1.0684042,1.980887,3.3859272,-3.9332833,-0.97807574,0.67047924,-0.77030766,1.1952081,8.525371,-0.27639112,-8.219419,-4.3506627,0.93446237,3.955072,-3.682673,-1.5677782,-6.7918572,4.556543,8.988926,1.6153657,13.157081,-7.3095202,-6.7097244,-1.7330406,-5.400186,1.8234549,10.5188875,-4.4084005,-2.8515608,4.394829,-10.170477,-3.6425822,5.3774214,8.574465,5.125784,-2.592275,0.416314,-1.4990387,-1.3619555,9.500459,-3.345467,1.6097945,-2.4869363,6.2751403,-2.7470694,-1.241509,9.263079,-2.357499,-0.71642643,9.081934,7.098453,13.064735,6.072085,0.86135876,0.42790878,-13.554738,-4.993654,7.828532,-0.26332355,1.3722762,3.2465909,-1.5418559,-3.5693011,-5.8441744,6.4627514,2.8090293,0.31156737,-3.857934,-11.280977,-4.0953608,-7.7492537,0.58041936,8.433039,-4.3115425,0.3458287,2.1145627,4.65377,-4.6333575,2.3745975,-1.8756385,4.223438,6.89845,0.79969174,-1.7829785,1.6288344,-1.8161334,-3.4675262,4.832272,-1.6210185,-1.696128,1.0028566,7.706657,-6.269442,-3.4574616,-4.935856,-0.52170604,9.285264,-1.5701663,0.94492525,-2.3315585,-6.3180594,1.2134569,-1.0206414,-1.8991766,-3.3108075,-1.8519135,-5.114469,-8.711949,5.9418797,5.3772616,-3.3919933,5.016679,-9.09488,15.286478,-3.5477734,-10.717793,-8.667156,3.430417,-9.043924,-6.3868427,3.771201,-9.276051,1.6036136,4.0459547,8.174598,13.675274,3.1494143,13.16244,2.141045,3.4357753,0.46819896,3.7956643,-6.269334,2.6654906,0.88894075,0.89534014,-1.8865765,-5.9851017,2.8273027,6.1478505,-7.5374966,-1.1878409,-2.6607187,1.4505111,-10.753712,-6.662928,-0.49729615,-2.2162392,2.1547415,-1.5608006,-6.2728963,0.29494822,2.0775702,0.94253886,-3.3023574,0.20184654,3.6718824,10.206356,-3.8106627,-0.86780673,-1.8850509,-4.458633,-0.2645319,-5.911129,5.141833,-6.1215625,3.2625692,5.239356,6.819452,6.961727,2.2123358,-0.37622842,3.0404775,-0.5514076,3.5382001,-0.4843125,9.572454,3.317881,-7.289935,8.832711,-7.854359,-3.8881705,1.4729297,-2.0490656,-6.3347015,0.12885739,11.582888,-8.913492,-6.617836,1.5036279,1.3143181,-4.920342,3.9786863,-4.9569116,8.047843,-0.64386404,-7.1422963,6.4997573,-5.8164296,-2.0426564,3.9373107,5.9638896,1.1785966,7.270487,-3.711227,-2.8631806,-3.3163843,-2.6125124,2.950503,-9.781572,1.1625123,7.967913,0.6939382,10.151258,-8.032308,-0.117915586,-1.595022,-7.2094173,5.5032854,1.3340335,1.4497712,0.8595004,3.7436821,-0.55241823,-2.5470426,-6.1092176,-10.614954,-5.7577777,0.35974905,-1.9811981,0.0054431106,-8.374586,6.760215,4.6665254,-2.4265747,3.263907,3.302049,9.178065,2.2093327,-11.06965,0.75237775,-4.508033,3.2366216,8.981704,5.302875,-8.408273,3.1710312,0.5038109,-0.73679346,-1.4566271,-12.260539,0.8673921,-1.9078183,-11.013678,2.750532,3.2524343,9.519965,12.611303,-2.7479165,6.3550787,1.4470017,-0.12573671,-6.489775,7.47961,0.7660119,2.517699,-4.97592,-8.806205,5.183689,0.123767346,-5.8479776,-0.12721643,7.4339147,5.3236895,2.7361069,-3.559886,3.7529047,-5.3707476,3.5633106,3.2847552,7.4842453,4.7480836,5.0248837,-3.7692423,-1.7893031,-3.1387558,1.1278142,-8.203136,2.105451,1.8934679,1.1727809,-3.0505586,-0.3243254,4.8932843,5.556009,-4.2797256,5.2714214,4.9797897,2.9320369,3.3040593,0.21399115,2.205502,2.7676451,4.722789,-2.0099642,5.958663,5.9893565,-14.761563,-2.696921,-1.9571339,-1.3625263,-4.778177,5.32249,-1.0973876,-0.2765338,-4.162304,-7.1115403,2.008183,5.265838,7.005275,0.998941,10.689762,-0.7107461,-2.3121784,1.6911142,0.7218279,-9.3835,-3.8390162,1.7028191,2.462449,0.035071786,-8.322564,2.435498,2.2931461,0.9931594,-0.8946622,3.4547412,-5.8351493,10.893359,-2.5663805,0.97312886,3.7423441,-0.13199523,5.793001,4.774439,-2.5494466,-11.072732,0.14585106,5.24943,-3.491153,-4.736221,-1.0961194,2.4460342,-13.608879,-0.32326534,2.3322601,5.4159718,-6.0713606,-4.9699006,4.9630904,4.758529,-3.9612696,-3.5901847,-7.9037423,4.1176996,5.1404896,3.7284865,3.2361503,0.15753356,-10.480198,-0.27333233,-12.892551,7.2325597,6.4994297,1.8522301,-7.6900454,-5.385723,13.301702,11.036094,2.9045067,-1.4765296,3.3513288,6.0128174,9.808207,0.62630045,-5.2958302,0.9629272,-6.148471,-9.973472,2.5368805,1.2529771,1.9739354,5.3408813,-0.66777575,-5.8822393,-5.032582,-2.2442875,11.496572,5.9201093,-1.322113,6.150977,-5.9573584,-3.654369,-8.140595,1.5725151,6.523251,-1.0965878,11.567554,1.665575,6.663997,1.0801463,6.6025505];
-
     params_sim.nn.use_ranking_network = true;
     params_sim.nn.rank_without_physics = true;
-    // params_sim.tracks_enable_mirror = true;
-
     params_sim.nn.pass_current_track = true;
-    params_sim.nn.pass_current_physics = true;
     params_sim.nn.max_tracks = 6;
+    params_sim.evolution_generation_count = 500;
 
-    // params_sim.enable_track("straight_45");
-    // params_sim.enable_track("loop");
-    // params_sim.enable_track("straight_turn");
-    // // params_sim.enable_track("bubble_straight");
-    // // params_sim.enable_track("bubble_180");
-    // params_sim.enable_track("separation");
+    let mut params_sim_copy = params_sim.clone();
 
-    // params_sim.simulation_random_output_second_way = true;
-    // params_sim.random_output_probability = 0.05;
-    // params_sim.evolution_learning_rate = 0.9;
+    test_embedding_evolution(&params_sim, &params_phys);
+    test_different_dirs_init(&params_sim, &params_phys);
 
-    params_sim.eval_add_other_physics = vec![
-        PhysicsPatch {
-            traction: Some(0.15),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            traction: Some(0.25),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            traction: Some(0.5),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            traction: Some(1.0),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            friction_coef: Some(1.0),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            friction_coef: Some(0.0),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            acceleration_ratio: Some(1.0),
-            ..PhysicsPatch::default()
-        },
-        PhysicsPatch {
-            acceleration_ratio: Some(0.6),
-            ..PhysicsPatch::default()
-        },
+    // -----------------------------------------------------------------------
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        1,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_1");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        2,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 2;
+    test_params_sim(&params_sim, &params_phys, "height_2");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        3,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 3;
+    test_params_sim(&params_sim, &params_phys, "height_3");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        2,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_2_start");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        3,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_3_start");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        1,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 2;
+    test_params_sim(&params_sim, &params_phys, "height_2_end");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        10,
+        1,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 3;
+    test_params_sim(&params_sim, &params_phys, "height_3_end");
+    params_sim = params_sim_copy.clone();
+
+    // -----------------------------------------------------------------------
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        5,
+        2,
+        ActivationFunction::ReluLeaky,
+    )];
+    test_params_sim(&params_sim, &params_phys, "height_2_opt");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(3, 3, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(3, 5, ActivationFunction::SqrtSigmoid),
     ];
+    test_params_sim(&params_sim, &params_phys, "height_3_width_2_opt");
+    params_sim = params_sim_copy.clone();
 
-    params_sim.nn.ranking_hidden_layers =
-        vec![LayerDescription::new(10, ActivationFunction::SqrtSigmoid)];
-    let result = evolve_by_cma_es_custom(
-        &params_sim,
-        &params_phys,
-        // &random_input(&params_sim),
-        &params,
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(9, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(7, 1, ActivationFunction::SqrtSigmoid),
+    ];
+    test_params_sim(&params_sim, &params_phys, "height_1_width_2_opt");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(8, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(7, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(7, 1, ActivationFunction::SqrtSigmoid),
+    ];
+    test_params_sim(&params_sim, &params_phys, "height_1_width_3_opt");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(7, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(6, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(6, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(6, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(6, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(4, 1, ActivationFunction::SqrtSigmoid),
+    ];
+    test_params_sim(&params_sim, &params_phys, "height_1_width_6_opt");
+    params_sim = params_sim_copy.clone();
+
+    // -----------------------------------------------------------------------
+
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(10, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(10, 1, ActivationFunction::SqrtSigmoid),
+    ];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_1_width_2");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![
+        LayerDescription::new_height(10, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(10, 1, ActivationFunction::SqrtSigmoid),
+        LayerDescription::new_height(10, 1, ActivationFunction::SqrtSigmoid),
+    ];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_1_width_3");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
+        20,
+        1,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_1_size_20");
+    params_sim = params_sim_copy.clone();
+
+    params_sim.nn.ranking_hidden_layers = vec![LayerDescription::new_height(
         30,
-        50,
-        Some(1.0),
-        None,
-    );
-    println!("{:?}", result.last().unwrap().nn);
+        1,
+        ActivationFunction::SqrtSigmoid,
+    )];
+    params_sim.nn.output_height = 1;
+    test_params_sim(&params_sim, &params_phys, "height_1_size_30");
+    params_sim = params_sim_copy.clone();
 
-    return;
+    // -----------------------------------------------------------------------
 
     params_sim.nn.use_ranking_network = true;
     params_sim.nn.rank_without_physics = true;
     test_params_sim(&params_sim, &params_phys, "hard2_ranker_all_maps");
     params_sim = params_sim_copy.clone();
-
-    return;
 
     test_params_sim(&params_sim, &params_phys, "hard2_default");
     params_sim = params_sim_copy.clone();
@@ -4179,8 +4667,6 @@ pub fn evolution() {
     test_params_sim(&params_sim, &params_phys, "hard2_ranker_physics");
     params_sim = params_sim_copy.clone();
 
-    return;
-
     params_sim.evolution_distance_to_solution = 10.;
     test_params_sim(&params_sim, &params_phys, "hard2_default_cmaes_1_10");
     params_sim = params_sim_copy.clone();
@@ -4193,8 +4679,6 @@ pub fn evolution() {
     params_sim.evolution_start_input_range = 10.;
     test_params_sim(&params_sim, &params_phys, "hard2_default_cmaes_10_1");
     params_sim = params_sim_copy.clone();
-
-    return;
 
     test_params_sim(&params_sim, &params_phys, "hard2_default");
     params_sim = params_sim_copy.clone();
@@ -4216,8 +4700,6 @@ pub fn evolution() {
     params_sim.tracks_enable_mirror = true;
     test_params_sim(&params_sim, &params_phys, "hard2_all_old_settings");
     params_sim = params_sim_copy.clone();
-
-    return;
 
     params_sim.nn.hidden_layers = vec![LayerDescription::new(10, ActivationFunction::Relu)];
     test_params_sim(&params_sim, &params_phys, "activations_relu");
@@ -4263,7 +4745,7 @@ pub fn evolution() {
     params_sim = params_sim_copy.clone();
 }
 
-pub const RUN_EVOLUTION: bool = false;
+pub const RUN_EVOLUTION: bool = true;
 pub const RUN_FROM_PREV_NN: bool = false;
 const ONE_THREADED: bool = false;
 const PRINT: bool = true;
@@ -4271,7 +4753,7 @@ const PRINT_EVERY_10: bool = false;
 const PRINT_EVERY_10_ONLY_EVALS: bool = true;
 const PRINT_EVALS: bool = true;
 
-const RUNS_COUNT: usize = 1;
+const RUNS_COUNT: usize = 60;
 const POPULATION_SIZE: usize = 30;
 const GENERATIONS_COUNT: usize = 300;
 pub const OTHER_PARAMS_SIZE: usize = 1;

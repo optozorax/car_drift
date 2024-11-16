@@ -514,12 +514,12 @@ impl Car {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, Copy, Default)]
 pub struct CarInput {
-    pub brake: fxx, // 0..1
-    pub acceleration: fxx,
-    pub remove_turn: fxx, // 0..1
-    pub turn: fxx,
+    pub brake: fxx,        // 0..1
+    pub acceleration: fxx, // -1..1
+    pub remove_turn: fxx,  // 0..1
+    pub turn: fxx,         // -1..1
 }
 
 fn two_relus_to_ratio(a: fxx, b: fxx) -> fxx {
@@ -530,6 +530,10 @@ fn two_relus_to_ratio(a: fxx, b: fxx) -> fxx {
     } else {
         0.
     }
+}
+
+fn lerp(a: fxx, b: fxx, t: fxx) -> fxx {
+    a + (b - a) * t
 }
 
 impl CarInput {
@@ -543,6 +547,38 @@ impl CarInput {
             remove_turn: sqrt_sigmoid(input[3]).max(0.),
             turn: two_relus_to_ratio(input[4], input[5]),
         }
+    }
+
+    pub fn lerp(a: Self, b: Self, t: fxx) -> Self {
+        Self {
+            brake: lerp(a.brake, b.brake, t),
+            acceleration: lerp(a.acceleration, b.acceleration, t),
+            remove_turn: lerp(a.remove_turn, b.remove_turn, t),
+            turn: lerp(a.turn, b.turn, t),
+        }
+    }
+
+    pub fn add(a: Self, val: [fxx; 4]) -> Self {
+        Self {
+            brake: (a.brake + val[0]).clamp(0., 1.),
+            acceleration: (a.acceleration + val[1]).clamp(-1., 1.),
+            remove_turn: (a.remove_turn + val[2]).clamp(0., 1.),
+            turn: (a.turn + val[3]).clamp(-1., 1.),
+        }
+    }
+
+    pub fn change(mut a: Self, val: fxx, pos: usize) -> Self {
+        if pos == 0 {
+            a.brake = val;
+        } else if pos == 1 {
+            a.acceleration = val;
+        } else if pos == 2 {
+            a.remove_turn = val;
+        } else if pos == 3 {
+            a.turn = val;
+        }
+
+        a
     }
 }
 
@@ -685,6 +721,7 @@ impl Car {
     }
 }
 
+#[derive(Default)]
 pub struct InternalCarValues {
     pub local_speed: Vecx2,
     pub local_acceleration: Vecx2,
